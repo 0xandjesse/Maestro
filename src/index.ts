@@ -53,6 +53,18 @@ export type { CreateMessageOptions } from './message/index.js';
 // Resolvers
 export { LocalKeyResolver } from './resolvers/LocalKeyResolver.js';
 
+// Blackboard
+export type { BlackboardEntry, BlackboardBackend, SharedBlackboard, Unsubscribe } from './blackboard/index.js';
+export { InMemoryBlackboard } from './blackboard/index.js';
+
+// Transport
+export type { MaestroConfig, MessageHandler, EventHandler, SendOptions, Artifact, WebhookEvent, DiscoveryConfig, DiscoveryMethod, AgentRegistration } from './transport/types.js';
+export { MessageRouter } from './transport/MessageRouter.js';
+export { LocalRegistry } from './transport/LocalRegistry.js';
+
+// SDK
+export { Maestro, VenueHandle } from './sdk/index.js';
+
 // Venue
 export type {
   Venue,

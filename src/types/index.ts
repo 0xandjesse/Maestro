@@ -115,13 +115,20 @@ export interface Provenance {
 
 export type MessageType =
   | 'chat'
+  | 'direct'
+  | 'broadcast'
+  | 'report'
+  | 'assign'
   | 'blackboard-read'
   | 'blackboard-write'
+  | 'blackboard:update'
   | 'capability'
   | 'software'
   | 'credential'
   | 'financial'
   | 'presence'
+  | 'venue:invitation'
+  | 'venue:announcement'
   | 'custom';
 
 // ----------------------------------------------------------
