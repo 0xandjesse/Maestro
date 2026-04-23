@@ -52,3 +52,25 @@ export type { CreateMessageOptions } from './message/index.js';
 
 // Resolvers
 export { LocalKeyResolver } from './resolvers/LocalKeyResolver.js';
+
+// Venue
+export type {
+  Venue,
+  VenueMember,
+  VenueHierarchy,
+  VenueStatus,
+  VenueEvent,
+  VenueEventType,
+  EntryMode,
+  MemberVisibility,
+  Permission,
+  JoinRequest,
+  JoinResponse,
+  JoinStatus,
+  CreateVenueRequest,
+  CreateVenueResponse,
+  RoleTransferRequest,
+  PermissionCheckResult,
+} from './venue/index.js';
+export { VenueManager, DEFAULT_PERMISSIONS, enforceProvenancePolicy } from './venue/index.js';
+export type { EnforcementResult } from './venue/index.js';
