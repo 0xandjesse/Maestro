@@ -26,6 +26,7 @@ import {
   VenueRules,
 } from '../venue/types.js';
 import { InMemoryBlackboard } from '../blackboard/InMemoryBlackboard.js';
+import { SqliteBlackboard } from '../blackboard/SqliteBlackboard.js';
 import { SharedBlackboard } from '../blackboard/types.js';
 import { MessageRouter } from '../transport/MessageRouter.js';
 import { WebhookServer } from '../transport/WebhookServer.js';
@@ -185,7 +186,7 @@ export class Maestro {
 
   private config: MaestroConfig;
   private venueHandles = new Map<string, VenueHandle>();
-  private blackboards = new Map<string, InMemoryBlackboard>();
+  private blackboards = new Map<string, SharedBlackboard>();
   private started = false;
   private webhookServer?: WebhookServer;
   readonly network: NetworkTransport;
@@ -407,7 +408,11 @@ export class Maestro {
 
   private makeHandle(venueId: string, hostManager?: VenueManager): VenueHandle {
     if (!this.blackboards.has(venueId)) {
-      this.blackboards.set(venueId, new InMemoryBlackboard());
+      // Use SQLite if a path is configured, otherwise in-memory
+      const bb = this.config.blackboardPath
+        ? new SqliteBlackboard({ path: this.config.blackboardPath, venueId })
+        : new InMemoryBlackboard();
+      this.blackboards.set(venueId, bb);
     }
     const bb = this.blackboards.get(venueId)!;
     const handle = new VenueHandle(this, venueId, bb, hostManager);
@@ -419,7 +424,7 @@ export class Maestro {
     this.venueHandles.delete(venueId);
   }
 
-  getBlackboard(venueId: string): InMemoryBlackboard | undefined {
+  getBlackboard(venueId: string): SharedBlackboard | undefined {
     return this.blackboards.get(venueId);
   }
 }

@@ -95,6 +95,12 @@ export interface MaestroConfig {
   discovery?: DiscoveryConfig;
   publicKey?: string;
   privateKey?: string;
+  /**
+   * Path to SQLite DB file for persistent Blackboards.
+   * Defaults to ':memory:' (ephemeral). Set to a file path
+   * (e.g. './.maestro/blackboard.db') for persistence across restarts.
+   */
+  blackboardPath?: string;
 }
 
 // ----------------------------------------------------------

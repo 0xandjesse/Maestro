@@ -55,7 +55,8 @@ export { LocalKeyResolver } from './resolvers/LocalKeyResolver.js';
 
 // Blackboard
 export type { BlackboardEntry, BlackboardBackend, SharedBlackboard, Unsubscribe } from './blackboard/index.js';
-export { InMemoryBlackboard } from './blackboard/index.js';
+export { InMemoryBlackboard, SqliteBlackboard } from './blackboard/index.js';
+export type { SqliteBlackboardOptions } from './blackboard/index.js';
 
 // Transport
 export type { MaestroConfig, MessageHandler, EventHandler, SendOptions, Artifact, WebhookEvent, DiscoveryConfig, DiscoveryMethod, AgentRegistration } from './transport/types.js';
