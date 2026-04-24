@@ -32,6 +32,7 @@ import { MessageRouter } from '../transport/MessageRouter.js';
 import { WebhookServer } from '../transport/WebhookServer.js';
 import { NetworkTransport } from '../transport/NetworkTransport.js';
 import { LocalRegistry } from '../transport/LocalRegistry.js';
+import { MdnsRegistry } from '../transport/MdnsRegistry.js';
 import {
   MaestroConfig,
   MessageHandler,
@@ -191,6 +192,7 @@ export class Maestro {
   private webhookServer?: WebhookServer;
   readonly network: NetworkTransport;
   private registry?: LocalRegistry;
+  private mdns?: MdnsRegistry;
 
   constructor(config: MaestroConfig) {
     this.config = config;
@@ -230,6 +232,18 @@ export class Maestro {
         capabilities: [],
       });
     }
+
+    // Start mDNS discovery if configured
+    if (this.config.discovery?.method === 'mdns' && this.config.webhookPort) {
+      this.mdns = new MdnsRegistry({
+        agentId: this.agentId,
+        port: this.config.webhookPort,
+        webhookPath: this.config.webhookPath,
+        publicKey: this.config.publicKey,
+        wallet: this.config.wallet,
+      });
+      this.mdns.start();
+    }
   }
 
   async stop(): Promise<void> {
@@ -238,6 +252,9 @@ export class Maestro {
 
     if (this.registry) {
       this.registry.unregister(this.agentId);
+    }
+    if (this.mdns) {
+      this.mdns.stop();
     }
     if (this.webhookServer) {
       await this.webhookServer.stop();
@@ -261,10 +278,21 @@ export class Maestro {
   }
 
   /**
-   * Look up a registered agent's endpoint from the local registry.
+   * Look up a registered agent's endpoint.
+   * Checks file registry first, then mDNS peer list.
    */
   lookupAgent(agentId: string) {
-    return this.registry?.lookup(agentId);
+    return this.registry?.lookup(agentId) ?? this.mdns?.lookupPeer(agentId);
+  }
+
+  /** Access the mDNS registry (if active) to list discovered peers */
+  get peers() {
+    return this.mdns?.listPeers() ?? [];
+  }
+
+  /** Trigger an active mDNS query to find peers on the local network */
+  discoverPeers(): void {
+    this.mdns?.query();
   }
 
   // ----------------------------------------------------------

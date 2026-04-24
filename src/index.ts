@@ -66,6 +66,8 @@ export { WebhookServer } from './transport/WebhookServer.js';
 export type { InboundHandler, WebhookServerOptions } from './transport/WebhookServer.js';
 export { NetworkTransport } from './transport/NetworkTransport.js';
 export type { DeliveryResult, NetworkTransportOptions } from './transport/NetworkTransport.js';
+export { MdnsRegistry } from './transport/MdnsRegistry.js';
+export type { MdnsRegistryOptions } from './transport/MdnsRegistry.js';
 
 // SDK
 export { Maestro, VenueHandle } from './sdk/index.js';
