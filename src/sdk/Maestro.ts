@@ -28,6 +28,9 @@ import {
 import { InMemoryBlackboard } from '../blackboard/InMemoryBlackboard.js';
 import { SharedBlackboard } from '../blackboard/types.js';
 import { MessageRouter } from '../transport/MessageRouter.js';
+import { WebhookServer } from '../transport/WebhookServer.js';
+import { NetworkTransport } from '../transport/NetworkTransport.js';
+import { LocalRegistry } from '../transport/LocalRegistry.js';
 import {
   MaestroConfig,
   MessageHandler,
@@ -184,12 +187,16 @@ export class Maestro {
   private venueHandles = new Map<string, VenueHandle>();
   private blackboards = new Map<string, InMemoryBlackboard>();
   private started = false;
+  private webhookServer?: WebhookServer;
+  readonly network: NetworkTransport;
+  private registry?: LocalRegistry;
 
   constructor(config: MaestroConfig) {
     this.config = config;
     this.agentId = config.agentId;
     this.venueManager = new VenueManager();
     this.router = new MessageRouter(config.agentId, this.venueManager);
+    this.network = new NetworkTransport();
   }
 
   // ----------------------------------------------------------
@@ -199,12 +206,64 @@ export class Maestro {
   async start(): Promise<void> {
     if (this.started) return;
     this.started = true;
-    // Future: start webhook server, mDNS, file registry heartbeat
+
+    // Start webhook server if a port is configured
+    if (this.config.webhookPort) {
+      this.webhookServer = new WebhookServer({
+        port: this.config.webhookPort,
+        path: this.config.webhookPath,
+        agentId: this.agentId,
+        onMessage: (msg) => this.receive(msg),
+      });
+      await this.webhookServer.start();
+    }
+
+    // Register with file-based discovery if configured
+    if (this.config.discovery?.method === 'file' && this.config.discovery.filePath) {
+      this.registry = new LocalRegistry(this.config.discovery.filePath);
+      this.registry.register({
+        agentId: this.agentId,
+        webhookEndpoint: this.webhookEndpoint,
+        publicKey: this.config.publicKey,
+        wallet: this.config.wallet,
+        capabilities: [],
+      });
+    }
   }
 
   async stop(): Promise<void> {
+    if (!this.started) return;
     this.started = false;
-    // Future: close webhook server, deregister from discovery
+
+    if (this.registry) {
+      this.registry.unregister(this.agentId);
+    }
+    if (this.webhookServer) {
+      await this.webhookServer.stop();
+    }
+  }
+
+  /** The webhook URL other agents should POST messages to */
+  get webhookEndpoint(): string {
+    if (this.webhookServer) return this.webhookServer.endpoint;
+    const port = this.config.webhookPort ?? 3001;
+    const path = this.config.webhookPath ?? '/maestro/webhook';
+    return `http://localhost:${port}${path}`;
+  }
+
+  /**
+   * Send a message to a remote agent by webhook endpoint.
+   * Use this for cross-process delivery.
+   */
+  async sendRemote(message: ReturnType<MessageRouter['buildMessage']>, recipientEndpoint: string) {
+    return this.network.send(message, recipientEndpoint);
+  }
+
+  /**
+   * Look up a registered agent's endpoint from the local registry.
+   */
+  lookupAgent(agentId: string) {
+    return this.registry?.lookup(agentId);
   }
 
   // ----------------------------------------------------------
