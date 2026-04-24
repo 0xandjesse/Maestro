@@ -1,0 +1,32 @@
+{
+  "id": "maestro-protocol",
+  "name": "Maestro Protocol",
+  "description": "Open agent coordination protocol. Gives agents presence, shared blackboards, and structured venues for multi-agent collaboration.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "agentId": {
+        "type": "string",
+        "description": "This agent's Maestro identity (defaults to the OpenClaw agent name)"
+      },
+      "webhookPort": {
+        "type": "number",
+        "description": "Port for the Maestro webhook server (default: 3842)"
+      },
+      "blackboardPath": {
+        "type": "string",
+        "description": "Path to SQLite file for persistent blackboards (default: in-memory)"
+      },
+      "discovery": {
+        "type": "string",
+        "enum": ["mdns", "file", "none"],
+        "description": "Discovery method for finding other Maestro agents (default: mdns)"
+      },
+      "registryPath": {
+        "type": "string",
+        "description": "Path to file registry (required when discovery=file)"
+      }
+    }
+  }
+}

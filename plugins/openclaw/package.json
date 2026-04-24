@@ -1,0 +1,14 @@
+{
+  "name": "@maestro-protocol/openclaw-plugin",
+  "version": "0.1.0",
+  "description": "Maestro Protocol plugin for OpenClaw — gives agents presence and coordination capabilities",
+  "type": "module",
+  "main": "./index.ts",
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "compat": {
+      "pluginApi": ">=2026.3.24-beta.2",
+      "minGatewayVersion": "2026.3.24-beta.2"
+    }
+  }
+}
