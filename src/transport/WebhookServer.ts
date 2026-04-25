@@ -46,6 +46,9 @@ export class WebhookServer {
     return new Promise((resolve, reject) => {
       this.server.listen(this.port, () => {
         this.started = true;
+        // unref() so this server doesn't hold the host process's event loop
+        // open when embedded in a plugin host (e.g. OpenClaw gateway).
+        this.server.unref();
         resolve();
       });
       this.server.once('error', reject);

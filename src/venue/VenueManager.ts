@@ -42,6 +42,7 @@ export const DEFAULT_PERMISSIONS: Record<string, Permission[]> = {
   ],
   worker: [
     'message:send',
+    'message:broadcast',  // Workers can broadcast in open/peer Venues
     'blackboard:read',
     'blackboard:write',
   ],

@@ -6,13 +6,29 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "agents": {
+        "type": "array",
+        "description": "Multi-agent configuration. Each entry configures one Maestro instance.",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["agentId"],
+          "properties": {
+            "agentId": { "type": "string" },
+            "webhookPort": { "type": "number" },
+            "blackboardPath": { "type": "string" },
+            "discovery": { "type": "string", "enum": ["mdns", "file", "none"] },
+            "registryPath": { "type": "string" }
+          }
+        }
+      },
       "agentId": {
         "type": "string",
-        "description": "This agent's Maestro identity (defaults to the OpenClaw agent name)"
+        "description": "(Legacy) Single agent identity"
       },
       "webhookPort": {
         "type": "number",
-        "description": "Port for the Maestro webhook server (default: 3842)"
+        "description": "(Legacy) Single agent webhook port"
       },
       "blackboardPath": {
         "type": "string",
@@ -21,7 +37,7 @@
       "discovery": {
         "type": "string",
         "enum": ["mdns", "file", "none"],
-        "description": "Discovery method for finding other Maestro agents (default: mdns)"
+        "description": "Discovery method (default: mdns)"
       },
       "registryPath": {
         "type": "string",

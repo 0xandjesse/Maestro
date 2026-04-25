@@ -50,6 +50,9 @@ export class MdnsRegistry extends EventEmitter {
     super();
     this.options = options;
     this.mdnsInstance = mdns();
+    // unref() the underlying UDP socket so it doesn't hold the host
+    // process's event loop open when embedded in a plugin host.
+    (this.mdnsInstance as any).unref?.();
   }
 
   // ----------------------------------------------------------
@@ -66,9 +69,13 @@ export class MdnsRegistry extends EventEmitter {
     // Announce immediately, then on interval
     this.announce();
     this.announceTimer = setInterval(() => this.announce(), ANNOUNCE_INTERVAL_MS);
+    // unref() so these timers don't hold the host process's event loop open
+    // when embedded in a plugin host (e.g. OpenClaw gateway).
+    this.announceTimer.unref();
 
     // Prune stale peers periodically
     this.pruneTimer = setInterval(() => this.prunePeers(), PRUNE_AFTER_MS / 2);
+    this.pruneTimer.unref();
   }
 
   stop(): void {
