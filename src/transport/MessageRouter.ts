@@ -15,8 +15,8 @@
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import { MaestroMessage, MessageType } from '../types/index.js';
-import { VenueManager } from '../venue/VenueManager.js';
-import { enforceProvenancePolicy } from '../venue/provenanceEnforcer.js';
+import { ConnectionManager } from '../connection/ConnectionManager.js';
+import { enforceProvenancePolicy } from '../connection/provenanceEnforcer.js';
 import { MessageHandler, SendOptions } from './types.js';
 
 const PROTOCOL_VERSION = '3.2';
@@ -27,13 +27,13 @@ const PROTOCOL_VERSION = '3.2';
 
 export class MessageRouter extends EventEmitter {
   private handlers = new Map<string, Set<MessageHandler>>();
-  private venueManager: VenueManager;
+  private connectionManager: ConnectionManager;
   private agentId: string;
 
-  constructor(agentId: string, venueManager: VenueManager) {
+  constructor(agentId: string, connectionManager: ConnectionManager) {
     super();
     this.agentId = agentId;
-    this.venueManager = venueManager;
+    this.connectionManager = connectionManager;
   }
 
   // ----------------------------------------------------------
@@ -72,11 +72,11 @@ export class MessageRouter extends EventEmitter {
    * Enforces Venue provenance policy before dispatch.
    */
   async dispatch(message: MaestroMessage): Promise<{ accepted: boolean; reason?: string }> {
-    // Check Venue provenance policy if applicable
-    if (message.venueId) {
-      const venue = this.venueManager.get(message.venueId);
-      if (venue?.rules.provenancePolicy) {
-        const check = enforceProvenancePolicy(message, venue.rules.provenancePolicy);
+    // Check Connection provenance policy if applicable
+    if (message.stageId) {
+      const connection = this.connectionManager.get(message.stageId);
+      if (connection?.rules.provenancePolicy) {
+        const check = enforceProvenancePolicy(message, connection.rules.provenancePolicy);
         if (!check.accepted) {
           return { accepted: false, reason: check.reason };
         }
@@ -112,7 +112,7 @@ export class MessageRouter extends EventEmitter {
     type: MessageType,
     content: string,
     recipient: string,
-    options: SendOptions & { venueId?: string; provenance?: MaestroMessage['provenance'] } = {},
+    options: SendOptions & { stageId?: string; provenance?: MaestroMessage['provenance'] } = {},
   ): MaestroMessage {
     return {
       id: randomUUID(),
@@ -122,7 +122,7 @@ export class MessageRouter extends EventEmitter {
       recipient,
       timestamp: Date.now(),
       version: PROTOCOL_VERSION,
-      ...(options.venueId ? { venueId: options.venueId } : {}),
+      ...(options.stageId ? { stageId: options.stageId } : {}),
       ...(options.replyTo ? { replyTo: options.replyTo } : {}),
       ...(options.provenance ? { provenance: options.provenance } : {}),
     };

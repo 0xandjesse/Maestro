@@ -1,5 +1,5 @@
 // ============================================================
-// Maestro Protocol — Venue Types
+// Maestro Protocol - Connection Types
 // ============================================================
 
 import { ProvenancePolicy } from '../types/index.js';
@@ -20,27 +20,27 @@ export type Permission =
   | 'venue:transfer';
 
 // ----------------------------------------------------------
-// Venue Rules
+// Connection Rules
 // ----------------------------------------------------------
 
 export type EntryMode = 'open' | 'invitation' | 'approval' | 'assignment';
 export type MemberVisibility = 'all' | 'role-based' | 'hierarchy';
 
-export interface VenueHierarchy {
+export interface ConnectionHierarchy {
   roles: string[];
   /** e.g. { worker: 'lead', cmo: 'coo' } */
   reportingChain: Record<string, string>;
   defaultRole: string;
 }
 
-export interface VenueRules {
+export interface ConnectionRules {
   entryMode: EntryMode;
   maxMembers?: number;
   memberVisibility: MemberVisibility;
-  hierarchy?: VenueHierarchy;
-  /** Permission map: role → list of allowed permissions */
+  hierarchy?: ConnectionHierarchy;
+  /** Permission map: role  list of allowed permissions */
   permissions: Record<string, Permission[]>;
-  /** Optional provenance requirements for messages in this Venue */
+  /** Optional provenance requirements for messages in this Connection */
   provenancePolicy?: ProvenancePolicy;
 }
 
@@ -48,7 +48,7 @@ export interface VenueRules {
 // Members
 // ----------------------------------------------------------
 
-export interface VenueMember {
+export interface ConnectionMember {
   agentId: string;
   role: string;
   joinedAt: number;
@@ -58,24 +58,24 @@ export interface VenueMember {
 }
 
 // ----------------------------------------------------------
-// Venue Status
+// Connection Status
 // ----------------------------------------------------------
 
-export type VenueStatus = 'created' | 'active' | 'closed';
+export type ConnectionStatus = 'created' | 'active' | 'closed';
 
 // ----------------------------------------------------------
-// Venue
+// Connection
 // ----------------------------------------------------------
 
-export interface Venue {
+export interface Connection {
   id: string;
   name: string;
   hostId: string;
-  rules: VenueRules;
-  members: VenueMember[];
+  rules: ConnectionRules;
+  members: ConnectionMember[];
   createdAt: number;
   expiresAt?: number;
-  status: VenueStatus;
+  status: ConnectionStatus;
 }
 
 // ----------------------------------------------------------
@@ -98,26 +98,30 @@ export type JoinStatus = 'accepted' | 'pending' | 'rejected';
 
 export interface JoinResponse {
   status: JoinStatus;
-  venueId?: string;
+  connectionId?: string;
+  /** Display name of the Connection (returned on accepted, for local mirroring) */
+  name?: string;
+  /** agentId of the Connection host (returned on accepted, for local mirroring) */
+  hostAgentId?: string;
   role?: string;
   supervisorId?: string;
   blackboard?: {
     httpEndpoint: string;
     websocket?: string;
   };
-  members?: VenueMember[];
-  rules?: VenueRules;
+  members?: ConnectionMember[];
+  rules?: ConnectionRules;
   requestId?: string;  // For pending status
   reason?: string;     // For rejected status
 }
 
 // ----------------------------------------------------------
-// Venue Creation
+// Connection Creation
 // ----------------------------------------------------------
 
-export interface CreateVenueRequest {
+export interface CreateConnectionRequest {
   name: string;
-  rules: VenueRules;
+  rules: ConnectionRules;
   initialMembers?: Array<{
     agentId: string;
     role: string;
@@ -126,8 +130,8 @@ export interface CreateVenueRequest {
   expiresAt?: number;
 }
 
-export interface CreateVenueResponse {
-  venueId: string;
+export interface CreateConnectionResponse {
+  connectionId: string;
   joinEndpoint: string;
 }
 
@@ -142,10 +146,10 @@ export interface RoleTransferRequest {
 }
 
 // ----------------------------------------------------------
-// Venue Events
+// Connection Events
 // ----------------------------------------------------------
 
-export type VenueEventType =
+export type ConnectionEventType =
   | 'message'
   | 'member:joined'
   | 'member:left'
@@ -154,13 +158,13 @@ export type VenueEventType =
   | 'venue:closed'
   | 'venue:invitation';
 
-export interface VenueEvent {
+export interface ConnectionEvent {
   eventId: string;
   timestamp: number;
-  venueId: string;
-  type: VenueEventType;
+  connectionId: string;
+  type: ConnectionEventType;
   payload: Record<string, unknown>;
-  /** Signed by Venue host for verification */
+  /** Signed by Connection host for verification */
   signature: string;
 }
 

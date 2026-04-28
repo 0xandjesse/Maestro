@@ -42,9 +42,9 @@ export interface SharedBlackboard {
  * Platforms implement this; agents never call it directly.
  */
 export interface BlackboardBackend {
-  get(venueId: string, key: string): Promise<BlackboardEntry | undefined>;
-  set(venueId: string, entry: BlackboardEntry): Promise<void>;
-  delete(venueId: string, key: string): Promise<void>;
-  list(venueId: string, prefix?: string): Promise<string[]>;
-  snapshot(venueId: string): Promise<Record<string, BlackboardEntry>>;
+  get(stageId: string, key: string): Promise<BlackboardEntry | undefined>;
+  set(stageId: string, entry: BlackboardEntry): Promise<void>;
+  delete(stageId: string, key: string): Promise<void>;
+  list(stageId: string, prefix?: string): Promise<string[]>;
+  snapshot(stageId: string): Promise<Record<string, BlackboardEntry>>;
 }

@@ -127,8 +127,8 @@ export type MessageType =
   | 'credential'
   | 'financial'
   | 'presence'
-  | 'venue:invitation'
-  | 'venue:announcement'
+  | 'connection:invitation'
+  | 'connection:announcement'
   | 'custom';
 
 // ----------------------------------------------------------
@@ -161,14 +161,17 @@ export interface MaestroMessage {
    */
   provenance?: Provenance;
 
-  /** Optional Venue context */
-  venueId?: string;
+  /** Optional Stage context */
+  stageId?: string;
 
   /** replyTo message ID for threading / backwards provenance */
   replyTo?: string;
 
   /** Protocol version */
   version?: string;
+
+  /** Optional structured payload — type-specific data (e.g. venue:invitation details, blackboard:update entry) */
+  payload?: Record<string, unknown>;
 }
 
 // ----------------------------------------------------------
@@ -195,8 +198,8 @@ export interface ProvenancePolicy {
   minimumTruncationMode?: ProvenanceMode;
 }
 
-export interface VenueRules {
-  venueId: string;
+export interface ConnectionRules {
+  connectionId: string;
   name?: string;
   provenancePolicy?: ProvenancePolicy;
   [key: string]: unknown;

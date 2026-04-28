@@ -1,9 +1,9 @@
 // ============================================================
-// Maestro Protocol — Venue Provenance Enforcer
+// Maestro Protocol - Connection Provenance Enforcer
 // ============================================================
 //
-// Enforces a Venue's ProvenancePolicy against an incoming
-// MaestroMessage. This sits at L1 (Venue rules), not L0.
+// Enforces a Connection's ProvenancePolicy against an incoming
+// MaestroMessage. This sits at L1 (Connection rules), not L0.
 // ============================================================
 
 import { MaestroMessage, ProvenanceMode } from '../types/index.js';
@@ -22,10 +22,10 @@ export interface EnforcementResult {
 }
 
 /**
- * Check whether a message satisfies a Venue's provenance policy.
+ * Check whether a message satisfies a Connection's provenance policy.
  *
  * @param message  The incoming MaestroMessage
- * @param policy   The Venue's ProvenancePolicy
+ * @param policy   The Connection's ProvenancePolicy
  */
 export function enforceProvenancePolicy(
   message: MaestroMessage,
@@ -42,7 +42,7 @@ export function enforceProvenancePolicy(
   }
 
   if (!message.provenance) {
-    // Provenance not required and not present — accepted
+    // Provenance not required and not present - accepted
     return { accepted: true };
   }
 

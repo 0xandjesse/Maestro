@@ -1,0 +1,40 @@
+{
+  "agents": [
+    {
+      "agentId": "songbird",
+      "transport": {
+        "port": 3842,
+        "registryPath": ".maestro/registry.json"
+      },
+      "discovery": {
+        "method": "mdns"
+      },
+      "openclaw": {
+        "gatewayUrl": "http://127.0.0.1:18789",
+        "hookToken": "06fe84970c2ba322f6e59e007145f015f862be85e72823265fad2b3b8ced1069",
+        "agentSessions": {
+          "songbird": "agent:songbird:main",
+          "lexicon": "agent:lexicon:telegram:direct:8244638936"
+        }
+      }
+    },
+    {
+      "agentId": "lexicon",
+      "transport": {
+        "port": 3843,
+        "registryPath": ".maestro/registry.json"
+      },
+      "discovery": {
+        "method": "mdns"
+      },
+      "openclaw": {
+        "gatewayUrl": "http://127.0.0.1:18789",
+        "hookToken": "06fe84970c2ba322f6e59e007145f015f862be85e72823265fad2b3b8ced1069",
+        "agentSessions": {
+          "songbird": "agent:songbird:main",
+          "lexicon": "agent:lexicon:telegram:direct:8244638936"
+        }
+      }
+    }
+  ]
+}

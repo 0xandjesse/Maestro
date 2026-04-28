@@ -1,13 +1,13 @@
-import { VenueManager, DEFAULT_PERMISSIONS } from '../venue/VenueManager.js';
-import { enforceProvenancePolicy } from '../venue/provenanceEnforcer.js';
-import { CreateVenueRequest, VenueRules } from '../venue/types.js';
+import { ConnectionManager, DEFAULT_PERMISSIONS } from '../connection/ConnectionManager.js';
+import { enforceProvenancePolicy } from '../connection/provenanceEnforcer.js';
+import { CreateConnectionRequest, ConnectionRules } from '../connection/types.js';
 import { MaestroMessage } from '../types/index.js';
 
 // ----------------------------------------------------------
 // Helpers
 // ----------------------------------------------------------
 
-function makeRules(overrides: Partial<VenueRules> = {}): VenueRules {
+function makeRules(overrides: Partial<ConnectionRules> = {}): ConnectionRules {
   return {
     entryMode: 'open',
     memberVisibility: 'all',
@@ -19,33 +19,33 @@ function makeRules(overrides: Partial<VenueRules> = {}): VenueRules {
   };
 }
 
-function makeCreateRequest(overrides: Partial<CreateVenueRequest> = {}): CreateVenueRequest {
+function makeCreateRequest(overrides: Partial<CreateConnectionRequest> = {}): CreateConnectionRequest {
   return {
-    name: 'Test Venue',
+    name: 'Test Connection',
     rules: makeRules(),
     ...overrides,
   };
 }
 
 // ----------------------------------------------------------
-// VenueManager tests
+// ConnectionManager tests
 // ----------------------------------------------------------
 
-describe('VenueManager — creation', () => {
-  it('creates a venue with host as lead', () => {
-    const mgr = new VenueManager();
-    const venue = mgr.create(makeCreateRequest(), 'Alpha');
+describe('ConnectionManager - creation', () => {
+  it('creates a connection with host as lead', () => {
+    const mgr = new ConnectionManager();
+    const connection = mgr.create(makeCreateRequest(), 'Alpha');
 
-    expect(venue.id).toBeTruthy();
-    expect(venue.hostId).toBe('Alpha');
-    expect(venue.members).toHaveLength(1);
-    expect(venue.members[0].agentId).toBe('Alpha');
-    expect(venue.members[0].role).toBe('lead');
+    expect(connection.id).toBeTruthy();
+    expect(connection.hostId).toBe('Alpha');
+    expect(connection.members).toHaveLength(1);
+    expect(connection.members[0].agentId).toBe('Alpha');
+    expect(connection.members[0].role).toBe('lead');
   });
 
   it('creates with initial members', () => {
-    const mgr = new VenueManager();
-    const venue = mgr.create(
+    const mgr = new ConnectionManager();
+    const connection = mgr.create(
       makeCreateRequest({
         initialMembers: [
           { agentId: 'Beta', role: 'worker' },
@@ -55,13 +55,13 @@ describe('VenueManager — creation', () => {
       'Alpha',
     );
 
-    expect(venue.members).toHaveLength(3);
-    expect(venue.status).toBe('active');
+    expect(connection.members).toHaveLength(3);
+    expect(connection.status).toBe('active');
   });
 
   it('wires hierarchy on creation', () => {
-    const mgr = new VenueManager();
-    const venue = mgr.create(
+    const mgr = new ConnectionManager();
+    const connection = mgr.create(
       makeCreateRequest({
         rules: makeRules({
           hierarchy: {
@@ -75,19 +75,19 @@ describe('VenueManager — creation', () => {
       'Alpha',
     );
 
-    const beta = venue.members.find(m => m.agentId === 'Beta');
-    const alpha = venue.members.find(m => m.agentId === 'Alpha');
+    const beta = connection.members.find(m => m.agentId === 'Beta');
+    const alpha = connection.members.find(m => m.agentId === 'Alpha');
     expect(beta?.supervisorId).toBe('Alpha');
     expect(alpha?.subordinateIds).toContain('Beta');
   });
 });
 
-describe('VenueManager — joining', () => {
-  it('accepts join to open venue', () => {
-    const mgr = new VenueManager();
-    const venue = mgr.create(makeCreateRequest(), 'Alpha');
+describe('ConnectionManager - joining', () => {
+  it('accepts join to open connection', () => {
+    const mgr = new ConnectionManager();
+    const connection = mgr.create(makeCreateRequest(), 'Alpha');
 
-    const result = mgr.processJoin(venue.id, {
+    const result = mgr.processJoin(connection.id, {
       protocolVersion: '3.2',
       agentId: 'Beta',
       identity: {},
@@ -98,11 +98,11 @@ describe('VenueManager — joining', () => {
     expect(result.role).toBe('worker');
   });
 
-  it('rejects join without invite token for invitation-mode venue', () => {
-    const mgr = new VenueManager();
-    const venue = mgr.create(makeCreateRequest({ rules: makeRules({ entryMode: 'invitation' }) }), 'Alpha');
+  it('rejects join without invite token for invitation-mode connection', () => {
+    const mgr = new ConnectionManager();
+    const connection = mgr.create(makeCreateRequest({ rules: makeRules({ entryMode: 'invitation' }) }), 'Alpha');
 
-    const result = mgr.processJoin(venue.id, {
+    const result = mgr.processJoin(connection.id, {
       protocolVersion: '3.2',
       agentId: 'Beta',
       identity: {},
@@ -113,11 +113,11 @@ describe('VenueManager — joining', () => {
     expect(result.reason).toBe('invite_required');
   });
 
-  it('accepts join with invite token for invitation-mode venue', () => {
-    const mgr = new VenueManager();
-    const venue = mgr.create(makeCreateRequest({ rules: makeRules({ entryMode: 'invitation' }) }), 'Alpha');
+  it('accepts join with invite token for invitation-mode connection', () => {
+    const mgr = new ConnectionManager();
+    const connection = mgr.create(makeCreateRequest({ rules: makeRules({ entryMode: 'invitation' }) }), 'Alpha');
 
-    const result = mgr.processJoin(venue.id, {
+    const result = mgr.processJoin(connection.id, {
       protocolVersion: '3.2',
       agentId: 'Beta',
       identity: {},
@@ -128,11 +128,11 @@ describe('VenueManager — joining', () => {
     expect(result.status).toBe('accepted');
   });
 
-  it('returns pending for approval-mode venue', () => {
-    const mgr = new VenueManager();
-    const venue = mgr.create(makeCreateRequest({ rules: makeRules({ entryMode: 'approval' }) }), 'Alpha');
+  it('returns pending for approval-mode connection', () => {
+    const mgr = new ConnectionManager();
+    const connection = mgr.create(makeCreateRequest({ rules: makeRules({ entryMode: 'approval' }) }), 'Alpha');
 
-    const result = mgr.processJoin(venue.id, {
+    const result = mgr.processJoin(connection.id, {
       protocolVersion: '3.2',
       agentId: 'Beta',
       identity: {},
@@ -143,12 +143,12 @@ describe('VenueManager — joining', () => {
     expect(result.requestId).toBeTruthy();
   });
 
-  it('rejects join to closed venue', () => {
-    const mgr = new VenueManager();
-    const venue = mgr.create(makeCreateRequest(), 'Alpha');
-    mgr.close(venue.id, 'Alpha');
+  it('rejects join to closed connection', () => {
+    const mgr = new ConnectionManager();
+    const connection = mgr.create(makeCreateRequest(), 'Alpha');
+    mgr.close(connection.id, 'Alpha');
 
-    const result = mgr.processJoin(venue.id, {
+    const result = mgr.processJoin(connection.id, {
       protocolVersion: '3.2',
       agentId: 'Beta',
       identity: {},
@@ -159,68 +159,68 @@ describe('VenueManager — joining', () => {
     expect(result.reason).toBe('venue_closed');
   });
 
-  it('rejects join when venue is full', () => {
-    const mgr = new VenueManager();
-    const venue = mgr.create(
+  it('rejects join when connection is full', () => {
+    const mgr = new ConnectionManager();
+    const connection = mgr.create(
       makeCreateRequest({ rules: makeRules({ maxMembers: 2 }) }),
       'Alpha',
     );
 
-    mgr.processJoin(venue.id, { protocolVersion: '3.2', agentId: 'Beta', identity: {}, webhookEndpoint: '' });
-    const result = mgr.processJoin(venue.id, { protocolVersion: '3.2', agentId: 'Gamma', identity: {}, webhookEndpoint: '' });
+    mgr.processJoin(connection.id, { protocolVersion: '3.2', agentId: 'Beta', identity: {}, webhookEndpoint: '' });
+    const result = mgr.processJoin(connection.id, { protocolVersion: '3.2', agentId: 'Gamma', identity: {}, webhookEndpoint: '' });
 
     expect(result.status).toBe('rejected');
     expect(result.reason).toBe('venue_full');
   });
 
   it('rejects duplicate join', () => {
-    const mgr = new VenueManager();
-    const venue = mgr.create(makeCreateRequest(), 'Alpha');
+    const mgr = new ConnectionManager();
+    const connection = mgr.create(makeCreateRequest(), 'Alpha');
 
-    mgr.processJoin(venue.id, { protocolVersion: '3.2', agentId: 'Beta', identity: {}, webhookEndpoint: '' });
-    const result = mgr.processJoin(venue.id, { protocolVersion: '3.2', agentId: 'Beta', identity: {}, webhookEndpoint: '' });
+    mgr.processJoin(connection.id, { protocolVersion: '3.2', agentId: 'Beta', identity: {}, webhookEndpoint: '' });
+    const result = mgr.processJoin(connection.id, { protocolVersion: '3.2', agentId: 'Beta', identity: {}, webhookEndpoint: '' });
 
     expect(result.status).toBe('rejected');
     expect(result.reason).toBe('already_member');
   });
 });
 
-describe('VenueManager — permissions', () => {
+describe('ConnectionManager - permissions', () => {
   it('allows permitted action', () => {
-    const mgr = new VenueManager();
-    const venue = mgr.create(makeCreateRequest(), 'Alpha');
-    const result = mgr.checkPermission(venue.id, 'Alpha', 'venue:close');
+    const mgr = new ConnectionManager();
+    const connection = mgr.create(makeCreateRequest(), 'Alpha');
+    const result = mgr.checkPermission(connection.id, 'Alpha', 'venue:close');
     expect(result.allowed).toBe(true);
   });
 
   it('denies unpermitted action', () => {
-    const mgr = new VenueManager();
-    const venue = mgr.create(makeCreateRequest(), 'Alpha');
-    mgr.processJoin(venue.id, { protocolVersion: '3.2', agentId: 'Beta', identity: {}, webhookEndpoint: '' });
-    const result = mgr.checkPermission(venue.id, 'Beta', 'venue:close');
+    const mgr = new ConnectionManager();
+    const connection = mgr.create(makeCreateRequest(), 'Alpha');
+    mgr.processJoin(connection.id, { protocolVersion: '3.2', agentId: 'Beta', identity: {}, webhookEndpoint: '' });
+    const result = mgr.checkPermission(connection.id, 'Beta', 'venue:close');
     expect(result.allowed).toBe(false);
   });
 
   it('denies non-member', () => {
-    const mgr = new VenueManager();
-    const venue = mgr.create(makeCreateRequest(), 'Alpha');
-    const result = mgr.checkPermission(venue.id, 'Stranger', 'message:send');
+    const mgr = new ConnectionManager();
+    const connection = mgr.create(makeCreateRequest(), 'Alpha');
+    const result = mgr.checkPermission(connection.id, 'Stranger', 'message:send');
     expect(result.allowed).toBe(false);
     expect(result.reason).toBe('not_a_member');
   });
 
   it('requirePermission throws on denial', () => {
-    const mgr = new VenueManager();
-    const venue = mgr.create(makeCreateRequest(), 'Alpha');
-    mgr.processJoin(venue.id, { protocolVersion: '3.2', agentId: 'Beta', identity: {}, webhookEndpoint: '' });
-    expect(() => mgr.requirePermission(venue.id, 'Beta', 'venue:close')).toThrow();
+    const mgr = new ConnectionManager();
+    const connection = mgr.create(makeCreateRequest(), 'Alpha');
+    mgr.processJoin(connection.id, { protocolVersion: '3.2', agentId: 'Beta', identity: {}, webhookEndpoint: '' });
+    expect(() => mgr.requirePermission(connection.id, 'Beta', 'venue:close')).toThrow();
   });
 });
 
-describe('VenueManager — role management', () => {
+describe('ConnectionManager - role management', () => {
   it('assigns a role', () => {
-    const mgr = new VenueManager();
-    const venue = mgr.create(
+    const mgr = new ConnectionManager();
+    const connection = mgr.create(
       makeCreateRequest({
         rules: makeRules({
           hierarchy: {
@@ -238,51 +238,51 @@ describe('VenueManager — role management', () => {
       'Alpha',
     );
 
-    mgr.processJoin(venue.id, { protocolVersion: '3.2', agentId: 'Beta', identity: {}, webhookEndpoint: '' });
-    mgr.assignRole(venue.id, 'Alpha', 'Beta', 'observer');
+    mgr.processJoin(connection.id, { protocolVersion: '3.2', agentId: 'Beta', identity: {}, webhookEndpoint: '' });
+    mgr.assignRole(connection.id, 'Alpha', 'Beta', 'observer');
 
-    const beta = mgr.getMember(venue.id, 'Beta');
+    const beta = mgr.getMember(connection.id, 'Beta');
     expect(beta?.role).toBe('observer');
   });
 
   it('transfers lead role', () => {
-    const mgr = new VenueManager();
-    const venue = mgr.create(makeCreateRequest(), 'Alpha');
-    mgr.processJoin(venue.id, { protocolVersion: '3.2', agentId: 'Beta', identity: {}, webhookEndpoint: '' });
+    const mgr = new ConnectionManager();
+    const connection = mgr.create(makeCreateRequest(), 'Alpha');
+    mgr.processJoin(connection.id, { protocolVersion: '3.2', agentId: 'Beta', identity: {}, webhookEndpoint: '' });
 
-    mgr.transferRole(venue.id, 'Alpha', { role: 'lead', to: 'Beta' });
+    mgr.transferRole(connection.id, 'Alpha', { role: 'lead', to: 'Beta' });
 
-    const beta = mgr.getMember(venue.id, 'Beta');
-    const alpha = mgr.getMember(venue.id, 'Alpha');
+    const beta = mgr.getMember(connection.id, 'Beta');
+    const alpha = mgr.getMember(connection.id, 'Alpha');
     expect(beta?.role).toBe('lead');
     expect(alpha?.role).toBe('worker');
   });
 
   it('removes a member', () => {
-    const mgr = new VenueManager();
-    const venue = mgr.create(makeCreateRequest(), 'Alpha');
-    mgr.processJoin(venue.id, { protocolVersion: '3.2', agentId: 'Beta', identity: {}, webhookEndpoint: '' });
+    const mgr = new ConnectionManager();
+    const connection = mgr.create(makeCreateRequest(), 'Alpha');
+    mgr.processJoin(connection.id, { protocolVersion: '3.2', agentId: 'Beta', identity: {}, webhookEndpoint: '' });
 
-    mgr.removeMember(venue.id, 'Alpha', 'Beta');
-    expect(mgr.getMember(venue.id, 'Beta')).toBeUndefined();
+    mgr.removeMember(connection.id, 'Alpha', 'Beta');
+    expect(mgr.getMember(connection.id, 'Beta')).toBeUndefined();
   });
 });
 
-describe('VenueManager — visibility', () => {
+describe('ConnectionManager - visibility', () => {
   it('all visibility shows all members', () => {
-    const mgr = new VenueManager();
-    const venue = mgr.create(makeCreateRequest(), 'Alpha');
-    mgr.processJoin(venue.id, { protocolVersion: '3.2', agentId: 'Beta', identity: {}, webhookEndpoint: '' });
-    mgr.processJoin(venue.id, { protocolVersion: '3.2', agentId: 'Gamma', identity: {}, webhookEndpoint: '' });
+    const mgr = new ConnectionManager();
+    const connection = mgr.create(makeCreateRequest(), 'Alpha');
+    mgr.processJoin(connection.id, { protocolVersion: '3.2', agentId: 'Beta', identity: {}, webhookEndpoint: '' });
+    mgr.processJoin(connection.id, { protocolVersion: '3.2', agentId: 'Gamma', identity: {}, webhookEndpoint: '' });
 
-    const visible = mgr.visibleMembers(venue, 'Beta');
+    const visible = mgr.visibleMembers(connection, 'Beta');
     expect(visible.map(m => m.agentId)).toContain('Alpha');
     expect(visible.map(m => m.agentId)).toContain('Gamma');
   });
 
   it('hierarchy visibility shows supervisor and peers only', () => {
-    const mgr = new VenueManager();
-    const venue = mgr.create(
+    const mgr = new ConnectionManager();
+    const connection = mgr.create(
       makeCreateRequest({
         rules: makeRules({
           memberVisibility: 'hierarchy',
@@ -300,7 +300,7 @@ describe('VenueManager — visibility', () => {
       'Alpha',
     );
 
-    const betaVisible = mgr.visibleMembers(mgr.get(venue.id)!, 'Beta');
+    const betaVisible = mgr.visibleMembers(mgr.get(connection.id)!, 'Beta');
     const ids = betaVisible.map(m => m.agentId);
     expect(ids).toContain('Alpha'); // supervisor
     expect(ids).toContain('Gamma'); // peer
@@ -308,20 +308,20 @@ describe('VenueManager — visibility', () => {
   });
 });
 
-describe('VenueManager — lifecycle', () => {
-  it('closes a venue', () => {
-    const mgr = new VenueManager();
-    const venue = mgr.create(makeCreateRequest(), 'Alpha');
-    mgr.close(venue.id, 'Alpha');
-    expect(mgr.get(venue.id)?.status).toBe('closed');
+describe('ConnectionManager - lifecycle', () => {
+  it('closes a connection', () => {
+    const mgr = new ConnectionManager();
+    const connection = mgr.create(makeCreateRequest(), 'Alpha');
+    mgr.close(connection.id, 'Alpha');
+    expect(mgr.get(connection.id)?.status).toBe('closed');
   });
 
-  it('prunes expired venues', () => {
-    const mgr = new VenueManager();
-    const venue = mgr.create(makeCreateRequest({ expiresAt: Date.now() - 1000 }), 'Alpha');
+  it('prunes expired connections', () => {
+    const mgr = new ConnectionManager();
+    const connection = mgr.create(makeCreateRequest({ expiresAt: Date.now() - 1000 }), 'Alpha');
     const pruned = mgr.pruneExpired();
-    expect(pruned).toContain(venue.id);
-    expect(mgr.get(venue.id)?.status).toBe('closed');
+    expect(pruned).toContain(connection.id);
+    expect(mgr.get(connection.id)?.status).toBe('closed');
   });
 });
 

@@ -1,1 +1,1 @@
-export { Maestro, VenueHandle } from './Maestro.js';
+export { Maestro, ConnectionHandle } from './Maestro.js';

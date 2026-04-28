@@ -9,7 +9,7 @@ import { createProvenance } from '../provenance/builder.js';
 export interface CreateMessageOptions {
   type?: MessageType;
   recipient?: string;
-  venueId?: string;
+  stageId?: string;
   replyTo?: string;
   provenanceMode?: ProvenanceMode;
 }
@@ -39,7 +39,7 @@ export async function createMessage(
     recipient: options.recipient ?? '*',
     timestamp,
     version: '3.2',
-    ...(options.venueId ? { venueId: options.venueId } : {}),
+    ...(options.stageId ? { stageId: options.stageId } : {}),
     ...(options.replyTo ? { replyTo: options.replyTo } : {}),
   };
 

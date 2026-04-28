@@ -18,7 +18,7 @@ function makeMaestro(agentId: string): Maestro {
 // Basic SDK tests
 // ----------------------------------------------------------
 
-describe('Maestro SDK — setup', () => {
+describe('Maestro SDK - setup', () => {
   it('initialises with agentId', () => {
     const m = makeMaestro('Alpha');
     expect(m.agentId).toBe('Alpha');
@@ -36,84 +36,84 @@ describe('Maestro SDK — setup', () => {
   });
 });
 
-describe('Maestro SDK — Venue creation', () => {
-  it('creates an open Venue', () => {
+describe('Maestro SDK - Connection creation', () => {
+  it('creates an open Connection', () => {
     const m = makeMaestro('Alpha');
-    const venue = m.createOpenVenue('Test Room');
-    expect(venue.venueId).toBeTruthy();
-    expect(venue.getVenueInfo().name).toBe('Test Room');
-    expect(venue.getVenueInfo().hostId).toBe('Alpha');
+    const connection = m.openConnection('Test Room');
+    expect(connection.connectionId).toBeTruthy();
+    expect(connection.getConnectionInfo().name).toBe('Test Room');
+    expect(connection.getConnectionInfo().hostId).toBe('Alpha');
   });
 
-  it('creates a hierarchical Venue', () => {
+  it('creates a hierarchical Connection', () => {
     const m = makeMaestro('Alpha');
-    const venue = m.createHierarchicalVenue(
-      'Task Venue',
+    const connection = m.openHierarchicalConnection(
+      'Task Connection',
       ['lead', 'worker'],
       { worker: 'lead' },
     );
-    const info = venue.getVenueInfo();
+    const info = connection.getConnectionInfo();
     expect(info.rules.hierarchy?.roles).toContain('lead');
     expect(info.rules.hierarchy?.roles).toContain('worker');
   });
 
   it('host is a member with lead role', () => {
     const m = makeMaestro('Alpha');
-    const venue = m.createOpenVenue('Room');
-    const member = venue.getMember('Alpha');
+    const connection = m.openConnection('Room');
+    const member = connection.getMember('Alpha');
     expect(member?.role).toBe('lead');
   });
 });
 
-describe('Maestro SDK — joining Venues', () => {
-  it('joins an open Venue', () => {
+describe('Maestro SDK - joining Connections', () => {
+  it('joins an open Connection', () => {
     const host = makeMaestro('Alpha');
     const guest = makeMaestro('Beta');
 
-    const venue = host.createOpenVenue('Open Room');
-    const response = guest.join(venue.venueId, host.venueManager);
+    const connection = host.openConnection('Open Room');
+    const response = guest.join(connection.connectionId, host.connectionManager);
 
     expect(response.status).toBe('accepted');
     expect(response.role).toBe('worker');
   });
 
-  it('gets a VenueHandle after joining', () => {
+  it('gets a ConnectionHandle after joining', () => {
     const host = makeMaestro('Alpha');
     const guest = makeMaestro('Beta');
 
-    const hostVenue = host.createOpenVenue('Room');
-    guest.join(hostVenue.venueId, host.venueManager);
+    const hostConnection = host.openConnection('Room');
+    guest.join(hostConnection.connectionId, host.connectionManager);
 
-    const guestVenue = guest.getVenue(hostVenue.venueId);
-    expect(guestVenue).toBeDefined();
-    expect(guestVenue?.venueId).toBe(hostVenue.venueId);
+    const guestConnection = guest.getConnection(hostConnection.connectionId);
+    expect(guestConnection).toBeDefined();
+    expect(guestConnection?.connectionId).toBe(hostConnection.connectionId);
   });
 
-  it('rejects join to unknown venue', () => {
+  it('rejects join to unknown connection', () => {
     const m = makeMaestro('Alpha');
-    const response = m.join('nonexistent-venue-id', m.venueManager);
+    const response = m.join('nonexistent-connection-id', m.connectionManager);
     expect(response.status).toBe('rejected');
   });
 });
 
-describe('Maestro SDK — messaging', () => {
+describe('Maestro SDK - messaging', () => {
   it('builds a direct message', async () => {
     const host = makeMaestro('Alpha');
-    const venue = host.createOpenVenue('Room');
+    const connection = host.openConnection('Room');
 
-    const msg = await venue.send('Beta', 'Hello Beta');
+    const msg = await connection.send('Beta', 'Hello Beta');
     expect(msg.type).toBe('direct');
     expect(msg.content).toBe('Hello Beta');
     expect(msg.sender.agentId).toBe('Alpha');
     expect(msg.recipient).toBe('Beta');
-    expect(msg.venueId).toBe(venue.venueId);
+    expect(msg.stageId).toBe(connection.connectionId);
   });
 
   it('builds a broadcast message', async () => {
     const host = makeMaestro('Alpha');
-    const venue = host.createOpenVenue('Room');
+    const connection = host.openConnection('Room');
 
-    const msg = await venue.broadcast('Hello everyone');
+    const msg = await connection.broadcast('Hello everyone');
     expect(msg.type).toBe('broadcast');
     expect(msg.recipient).toBe('*');
   });
@@ -121,13 +121,13 @@ describe('Maestro SDK — messaging', () => {
   it('dispatches inbound message to handler', async () => {
     const host = makeMaestro('Alpha');
     const guest = makeMaestro('Beta');
-    const hostVenue = host.createOpenVenue('Room');
-    guest.join(hostVenue.venueId, host.venueManager);
+    const hostConnection = host.openConnection('Room');
+    guest.join(hostConnection.connectionId, host.connectionManager);
 
     const received: MaestroMessage[] = [];
     host.onMessage('direct' as MessageType, (msg) => { received.push(msg); });
 
-    const msg = await guest.getVenue(hostVenue.venueId)!.send('Alpha', 'Hey Alpha');
+    const msg = await guest.getConnection(hostConnection.connectionId)!.send('Alpha', 'Hey Alpha');
     await host.receive(msg);
 
     expect(received).toHaveLength(1);
@@ -136,25 +136,25 @@ describe('Maestro SDK — messaging', () => {
 
   it('dispatches to wildcard handler', async () => {
     const host = makeMaestro('Alpha');
-    const venue = host.createOpenVenue('Room');
+    const connection = host.openConnection('Room');
 
     const received: MaestroMessage[] = [];
     host.onMessage('*', (msg) => { received.push(msg); });
 
-    const msg = await venue.send('Beta', 'test');
+    const msg = await connection.send('Beta', 'test');
     await host.receive(msg);
 
     expect(received.length).toBeGreaterThan(0);
   });
 });
 
-describe('Maestro SDK — hierarchy messaging', () => {
+describe('Maestro SDK - hierarchy messaging', () => {
   it('reportTo sends to supervisor', async () => {
     const lead = makeMaestro('Lex');
     const worker = makeMaestro('Yuma');
 
     // Use open entry mode so workers can join without a token
-    const venue = lead.createVenue({
+    const connection = lead.createConnection({
       name: 'Task A',
       rules: {
         entryMode: 'open',
@@ -167,10 +167,10 @@ describe('Maestro SDK — hierarchy messaging', () => {
       },
     });
 
-    worker.join(venue.venueId, lead.venueManager);
+    worker.join(connection.connectionId, lead.connectionManager);
 
-    const yumavenue = worker.getVenue(venue.venueId)!;
-    const msg = await yumavenue.reportTo('Frontend complete');
+    const yumaConnection = worker.getConnection(connection.connectionId)!;
+    const msg = await yumaConnection.reportTo('Frontend complete');
 
     expect(msg.type).toBe('report');
     expect(msg.recipient).toBe('Lex');
@@ -180,7 +180,7 @@ describe('Maestro SDK — hierarchy messaging', () => {
     const lead = makeMaestro('Lex');
     const worker = makeMaestro('Yuma');
 
-    const venue = lead.createVenue({
+    const connection = lead.createConnection({
       name: 'Task A',
       rules: {
         entryMode: 'open',
@@ -192,10 +192,10 @@ describe('Maestro SDK — hierarchy messaging', () => {
         },
       },
     });
-    worker.join(venue.venueId, lead.venueManager);
+    worker.join(connection.connectionId, lead.connectionManager);
 
-    const lexVenue = lead.getVenue(venue.venueId)!;
-    const msg = await lexVenue.assignTo('Yuma', 'Build the frontend');
+    const lexConnection = lead.getConnection(connection.connectionId)!;
+    const msg = await lexConnection.assignTo('Yuma', 'Build the frontend');
 
     expect(msg.type).toBe('assign');
     expect(msg.recipient).toBe('Yuma');
@@ -203,82 +203,82 @@ describe('Maestro SDK — hierarchy messaging', () => {
 
   it('reportTo throws without supervisor', async () => {
     const lead = makeMaestro('Lex');
-    const venue = lead.createOpenVenue('Flat Room'); // no hierarchy
-    await expect(venue.reportTo('Done')).rejects.toThrow('No supervisor');
+    const connection = lead.openConnection('Flat Room'); // no hierarchy
+    await expect(connection.reportTo('Done')).rejects.toThrow('No supervisor');
   });
 });
 
-describe('Maestro SDK — Blackboard', () => {
-  it('sets and gets via VenueHandle', async () => {
+describe('Maestro SDK - Blackboard', () => {
+  it('sets and gets via ConnectionHandle', async () => {
     const m = makeMaestro('Alpha');
-    const venue = m.createOpenVenue('Room');
+    const connection = m.openConnection('Room');
 
-    await venue.blackboard.set('status', { phase: 'design' }, 'Alpha');
-    expect(await venue.blackboard.get('status')).toEqual({ phase: 'design' });
+    await connection.blackboard.set('status', { phase: 'design' }, 'Alpha');
+    expect(await connection.blackboard.get('status')).toEqual({ phase: 'design' });
   });
 
-  it('different venues have isolated blackboards', async () => {
+  it('different connections have isolated blackboards', async () => {
     const m = makeMaestro('Alpha');
-    const v1 = m.createOpenVenue('Room 1');
-    const v2 = m.createOpenVenue('Room 2');
+    const s1 = m.openConnection('Room 1');
+    const s2 = m.openConnection('Room 2');
 
-    await v1.blackboard.set('key', 'room1-value', 'Alpha');
-    expect(await v2.blackboard.get('key')).toBeUndefined();
+    await s1.blackboard.set('key', 'room1-value', 'Alpha');
+    expect(await s2.blackboard.get('key')).toBeUndefined();
   });
 
   it('subscribeAll fires on any write', async () => {
     const m = makeMaestro('Alpha');
-    const venue = m.createOpenVenue('Room');
+    const connection = m.openConnection('Room');
 
     const keys: string[] = [];
-    venue.blackboard.subscribeAll((entry) => keys.push(entry.key));
+    connection.blackboard.subscribeAll((entry) => keys.push(entry.key));
 
-    await venue.blackboard.set('a', 1, 'Alpha');
-    await venue.blackboard.set('b', 2, 'Alpha');
+    await connection.blackboard.set('a', 1, 'Alpha');
+    await connection.blackboard.set('b', 2, 'Alpha');
 
     expect(keys).toContain('a');
     expect(keys).toContain('b');
   });
 });
 
-describe('Maestro SDK — Venue lifecycle', () => {
-  it('closes a Venue', async () => {
+describe('Maestro SDK - Connection lifecycle', () => {
+  it('closes a Connection', async () => {
     const m = makeMaestro('Alpha');
-    const venue = m.createOpenVenue('Room');
-    const venueId = venue.venueId;
+    const connection = m.openConnection('Room');
+    const connectionId = connection.connectionId;
 
-    await venue.close();
+    await connection.close();
 
-    expect(m.getVenue(venueId)).toBeUndefined();
-    expect(m.venueManager.get(venueId)?.status).toBe('closed');
+    expect(m.getConnection(connectionId)).toBeUndefined();
+    expect(m.connectionManager.get(connectionId)?.status).toBe('closed');
   });
 
-  it('guest can leave Venue', async () => {
+  it('guest can leave Connection', async () => {
     const host = makeMaestro('Alpha');
     const guest = makeMaestro('Beta');
-    const hostVenue = host.createOpenVenue('Room');
-    guest.join(hostVenue.venueId, host.venueManager);
+    const hostConnection = host.openConnection('Room');
+    guest.join(hostConnection.connectionId, host.connectionManager);
 
-    const guestVenue = guest.getVenue(hostVenue.venueId)!;
-    await guestVenue.leave();
+    const guestConnection = guest.getConnection(hostConnection.connectionId)!;
+    await guestConnection.leave();
 
-    expect(guest.getVenue(hostVenue.venueId)).toBeUndefined();
-    expect(host.venueManager.getMember(hostVenue.venueId, 'Beta')).toBeUndefined();
+    expect(guest.getConnection(hostConnection.connectionId)).toBeUndefined();
+    expect(host.connectionManager.getMember(hostConnection.connectionId, 'Beta')).toBeUndefined();
   });
 
-  it('lists all venues', () => {
+  it('lists all connections', () => {
     const m = makeMaestro('Alpha');
-    m.createOpenVenue('Room 1');
-    m.createOpenVenue('Room 2');
-    expect(m.listVenues()).toHaveLength(2);
+    m.openConnection('Room 1');
+    m.openConnection('Room 2');
+    expect(m.listConnections()).toHaveLength(2);
   });
 });
 
-describe('Maestro SDK — provenance policy enforcement', () => {
+describe('Maestro SDK - provenance policy enforcement', () => {
   it('rejects message missing required provenance', async () => {
     const m = makeMaestro('Alpha');
-    const venue = m.createVenue({
-      name: 'Secure Venue',
+    const connection = m.createConnection({
+      name: 'Secure Connection',
       rules: {
         entryMode: 'open',
         memberVisibility: 'all',
@@ -296,7 +296,7 @@ describe('Maestro SDK — provenance policy enforcement', () => {
       sender: { agentId: 'Beta' },
       recipient: 'Alpha',
       timestamp: Date.now(),
-      venueId: venue.venueId,
+      stageId: connection.connectionId,
       version: '3.2',
     };
 
@@ -307,8 +307,8 @@ describe('Maestro SDK — provenance policy enforcement', () => {
 
   it('accepts message with provenance when required', async () => {
     const m = makeMaestro('Alpha');
-    const venue = m.createVenue({
-      name: 'Secure Venue',
+    const connection = m.createConnection({
+      name: 'Secure Connection',
       rules: {
         entryMode: 'open',
         memberVisibility: 'all',
@@ -324,7 +324,7 @@ describe('Maestro SDK — provenance policy enforcement', () => {
       sender: { agentId: 'Beta' },
       recipient: 'Alpha',
       timestamp: Date.now(),
-      venueId: venue.venueId,
+      stageId: connection.connectionId,
       version: '3.2',
       provenance: {
         mode: 'full',

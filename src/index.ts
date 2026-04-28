@@ -1,5 +1,5 @@
 // ============================================================
-// Maestro Protocol — Public API
+// Maestro Protocol - Public API
 // ============================================================
 
 // Types
@@ -17,7 +17,7 @@ export type {
   TruncationMode,
   VerificationResult,
   VerificationStatus,
-  VenueRules,
+  ConnectionRules,
 } from './types/index.js';
 
 // Crypto primitives
@@ -55,34 +55,46 @@ export { LocalKeyResolver } from './resolvers/LocalKeyResolver.js';
 
 // Blackboard
 export type { BlackboardEntry, BlackboardBackend, SharedBlackboard, Unsubscribe } from './blackboard/index.js';
-export { InMemoryBlackboard } from './blackboard/index.js';
+export { InMemoryBlackboard, SQLiteBlackboard, BlackboardBridge } from './blackboard/index.js';
 
 // Transport
 export type { MaestroConfig, MessageHandler, EventHandler, SendOptions, Artifact, WebhookEvent, DiscoveryConfig, DiscoveryMethod, AgentRegistration } from './transport/types.js';
 export { MessageRouter } from './transport/MessageRouter.js';
 export { LocalRegistry } from './transport/LocalRegistry.js';
+export { HttpTransport } from './transport/HttpTransport.js';
+export type { HttpTransportConfig } from './transport/HttpTransport.js';
+export { NetworkDelivery, deliverMessage } from './transport/NetworkDelivery.js';
+export { MdnsDiscovery } from './transport/MdnsDiscovery.js';
+export type { MdnsDiscoveryConfig } from './transport/MdnsDiscovery.js';
+export type { DeliveryResult } from './transport/NetworkDelivery.js';
+export { OpenClawAdapter } from './plugin/OpenClawAdapter.js';
+export type { OpenClawAdapterConfig } from './plugin/OpenClawAdapter.js';
+export { ConnectionBroker } from './transport/ConnectionBroker.js';
+export type { ConnectionBrokerConfig, ConnectionInvitation, CreateConnectionResult } from './transport/ConnectionBroker.js';
+export { ConnectionStore } from './transport/ConnectionStore.js';
+export type { StoredConnection } from './transport/ConnectionStore.js';
 
 // SDK
-export { Maestro, VenueHandle } from './sdk/index.js';
+export { Maestro, ConnectionHandle } from './sdk/index.js';
 
-// Venue
+// Connection
 export type {
-  Venue,
-  VenueMember,
-  VenueHierarchy,
-  VenueStatus,
-  VenueEvent,
-  VenueEventType,
+  Connection,
+  ConnectionMember,
+  ConnectionHierarchy,
+  ConnectionStatus,
+  ConnectionEvent,
+  ConnectionEventType,
   EntryMode,
   MemberVisibility,
   Permission,
   JoinRequest,
   JoinResponse,
   JoinStatus,
-  CreateVenueRequest,
-  CreateVenueResponse,
+  CreateConnectionRequest,
+  CreateConnectionResponse,
   RoleTransferRequest,
   PermissionCheckResult,
-} from './venue/index.js';
-export { VenueManager, DEFAULT_PERMISSIONS, enforceProvenancePolicy } from './venue/index.js';
-export type { EnforcementResult } from './venue/index.js';
+} from './connection/index.js';
+export { ConnectionManager, DEFAULT_PERMISSIONS, enforceProvenancePolicy } from './connection/index.js';
+export type { EnforcementResult } from './connection/index.js';

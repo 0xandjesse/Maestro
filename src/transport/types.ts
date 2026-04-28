@@ -13,8 +13,8 @@ export type TransportMessageType =
   | 'broadcast'
   | 'report'        // Worker → supervisor
   | 'assign'        // Supervisor → worker
-  | 'venue:invitation'
-  | 'venue:announcement'
+  | 'connection:invitation'
+  | 'connection:announcement'
   | 'blackboard:update';
 
 // ----------------------------------------------------------
@@ -43,7 +43,7 @@ export interface Artifact {
 export interface WebhookEvent {
   eventId: string;
   timestamp: number;
-  venueId: string;
+  stageId: string;
   type:
     | 'message'
     | 'member:joined'
@@ -51,9 +51,9 @@ export interface WebhookEvent {
     | 'role:changed'
     | 'blackboard:updated'
     | 'venue:closed'
-    | 'venue:invitation';
+    | 'connection:invitation';
   payload: Record<string, unknown>;
-  /** Signed by Venue host for verification */
+  /** Signed by Connection host for verification */
   signature: string;
 }
 
@@ -95,6 +95,19 @@ export interface MaestroConfig {
   discovery?: DiscoveryConfig;
   publicKey?: string;
   privateKey?: string;
+  /** HTTP transport config. When present, boots an HttpTransport server. */
+  transport?: {
+    port?: number;
+    registryPath?: string;
+    /** Path to the SQLite blackboard DB. Default: .maestro/blackboard.db */
+    dbPath?: string;
+  };
+  /** OpenClaw integration. When present, wakes agent sessions on inbound messages. */
+  openclaw?: {
+    gatewayUrl: string;
+    hookToken: string;
+    agentSessions?: Record<string, string>;
+  };
 }
 
 // ----------------------------------------------------------

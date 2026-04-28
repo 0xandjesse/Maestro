@@ -1,27 +1,27 @@
 // ============================================================
-// Maestro Protocol — Venue Manager
+// Maestro Protocol - Connection Manager
 // ============================================================
 //
-// Manages Venue lifecycle: creation, member management,
+// Manages Connection lifecycle: creation, member management,
 // permission enforcement, role assignment, and closure.
 //
 // This is an in-process implementation suitable for local mode
-// and testing. Network mode venues delegate to a platform
+// and testing. Network mode connections delegate to a platform
 // host (e.g. TaskMaster API).
 // ============================================================
 
 import { randomUUID } from 'crypto';
 import {
-  CreateVenueRequest,
+  CreateConnectionRequest,
   JoinRequest,
   JoinResponse,
   Permission,
   PermissionCheckResult,
   RoleTransferRequest,
-  Venue,
-  VenueMember,
-  VenueRules,
-  VenueStatus,
+  Connection,
+  ConnectionMember,
+  ConnectionRules,
+  ConnectionStatus,
 } from './types.js';
 
 // ----------------------------------------------------------
@@ -51,21 +51,21 @@ export const DEFAULT_PERMISSIONS: Record<string, Permission[]> = {
 };
 
 // ----------------------------------------------------------
-// VenueManager
+// ConnectionManager
 // ----------------------------------------------------------
 
-export class VenueManager {
-  private venues = new Map<string, Venue>();
+export class ConnectionManager {
+  private connections = new Map<string, Connection>();
 
   // ----------------------------------------------------------
   // Create
   // ----------------------------------------------------------
 
-  create(request: CreateVenueRequest, hostId: string): Venue {
+  create(request: CreateConnectionRequest, hostId: string): Connection {
     const id = randomUUID();
     const now = Date.now();
 
-    const members: VenueMember[] = [];
+    const members: ConnectionMember[] = [];
 
     // Host is always the first member with lead role (or the hierarchy's top role)
     const hostRole = request.rules.hierarchy?.roles[0] ?? 'lead';
@@ -95,7 +95,7 @@ export class VenueManager {
       this.wireHierarchy(members, request.rules.hierarchy.reportingChain);
     }
 
-    const venue: Venue = {
+    const connection: Connection = {
       id,
       name: request.name,
       hostId,
@@ -106,25 +106,25 @@ export class VenueManager {
       ...(request.expiresAt ? { expiresAt: request.expiresAt } : {}),
     };
 
-    this.venues.set(id, venue);
-    return venue;
+    this.connections.set(id, connection);
+    return connection;
   }
 
   // ----------------------------------------------------------
   // Join
   // ----------------------------------------------------------
 
-  processJoin(venueId: string, request: JoinRequest): JoinResponse {
-    const venue = this.venues.get(venueId);
-    if (!venue) {
+  processJoin(connectionId: string, request: JoinRequest): JoinResponse {
+    const connection = this.connections.get(connectionId);
+    if (!connection) {
       return { status: 'rejected', reason: 'venue_not_found' };
     }
 
-    if (venue.status === 'closed') {
+    if (connection.status === 'closed') {
       return { status: 'rejected', reason: 'venue_closed' };
     }
 
-    const rules = venue.rules;
+    const rules = connection.rules;
 
     // Check entry mode
     if (rules.entryMode === 'approval') {
@@ -140,18 +140,18 @@ export class VenueManager {
     }
 
     // Check capacity
-    if (rules.maxMembers && venue.members.length >= rules.maxMembers) {
+    if (rules.maxMembers && connection.members.length >= rules.maxMembers) {
       return { status: 'rejected', reason: 'venue_full' };
     }
 
     // Already a member?
-    if (venue.members.find(m => m.agentId === request.agentId)) {
+    if (connection.members.find(m => m.agentId === request.agentId)) {
       return { status: 'rejected', reason: 'already_member' };
     }
 
     // Add member with default role
     const defaultRole = rules.hierarchy?.defaultRole ?? 'worker';
-    const member: VenueMember = {
+    const member: ConnectionMember = {
       agentId: request.agentId,
       role: defaultRole,
       joinedAt: Date.now(),
@@ -159,23 +159,25 @@ export class VenueManager {
       subordinateIds: [],
     };
 
-    venue.members.push(member);
-    venue.status = 'active';
+    connection.members.push(member);
+    connection.status = 'active';
 
     // Wire up hierarchy for new member
     if (rules.hierarchy) {
-      this.wireHierarchy(venue.members, rules.hierarchy.reportingChain);
+      this.wireHierarchy(connection.members, rules.hierarchy.reportingChain);
     }
 
-    const supervisor = this.getSupervisor(venue, request.agentId);
+    const supervisor = this.getSupervisor(connection, request.agentId);
 
     return {
       status: 'accepted',
-      venueId: venue.id,
+      connectionId: connection.id,
+      name: connection.name,
+      hostAgentId: connection.hostId,
       role: defaultRole,
       supervisorId: supervisor?.agentId,
-      members: this.visibleMembers(venue, request.agentId),
-      rules: venue.rules,
+      members: this.visibleMembers(connection, request.agentId),
+      rules: connection.rules,
     };
   }
 
@@ -184,18 +186,18 @@ export class VenueManager {
   // ----------------------------------------------------------
 
   checkPermission(
-    venueId: string,
+    connectionId: string,
     agentId: string,
     permission: Permission,
   ): PermissionCheckResult {
-    const venue = this.venues.get(venueId);
-    if (!venue) return { allowed: false, reason: 'venue_not_found' };
-    if (venue.status === 'closed') return { allowed: false, reason: 'venue_closed' };
+    const connection = this.connections.get(connectionId);
+    if (!connection) return { allowed: false, reason: 'venue_not_found' };
+    if (connection.status === 'closed') return { allowed: false, reason: 'venue_closed' };
 
-    const member = venue.members.find(m => m.agentId === agentId);
+    const member = connection.members.find(m => m.agentId === agentId);
     if (!member) return { allowed: false, reason: 'not_a_member' };
 
-    const rolePermissions = venue.rules.permissions[member.role] ?? [];
+    const rolePermissions = connection.rules.permissions[member.role] ?? [];
     if (rolePermissions.includes(permission)) {
       return { allowed: true };
     }
@@ -206,8 +208,8 @@ export class VenueManager {
     };
   }
 
-  requirePermission(venueId: string, agentId: string, permission: Permission): void {
-    const result = this.checkPermission(venueId, agentId, permission);
+  requirePermission(connectionId: string, agentId: string, permission: Permission): void {
+    const result = this.checkPermission(connectionId, agentId, permission);
     if (!result.allowed) {
       throw new Error(`Permission denied: ${result.reason}`);
     }
@@ -218,59 +220,59 @@ export class VenueManager {
   // ----------------------------------------------------------
 
   assignRole(
-    venueId: string,
+    connectionId: string,
     requestingAgentId: string,
     targetAgentId: string,
     newRole: string,
   ): void {
-    this.requirePermission(venueId, requestingAgentId, 'role:assign');
+    this.requirePermission(connectionId, requestingAgentId, 'role:assign');
 
-    const venue = this.getVenueOrThrow(venueId);
+    const connection = this.getConnectionOrThrow(connectionId);
 
-    const validRoles = venue.rules.hierarchy?.roles ?? Object.keys(venue.rules.permissions);
+    const validRoles = connection.rules.hierarchy?.roles ?? Object.keys(connection.rules.permissions);
     if (!validRoles.includes(newRole)) {
       throw new Error(`Unknown role: ${newRole}`);
     }
 
-    const member = venue.members.find(m => m.agentId === targetAgentId);
-    if (!member) throw new Error(`Agent ${targetAgentId} is not a member of venue ${venueId}`);
+    const member = connection.members.find(m => m.agentId === targetAgentId);
+    if (!member) throw new Error(`Agent ${targetAgentId} is not a member of connection ${connectionId}`);
 
     member.role = newRole;
 
     // Re-wire hierarchy after role change
-    if (venue.rules.hierarchy) {
-      this.wireHierarchy(venue.members, venue.rules.hierarchy.reportingChain);
+    if (connection.rules.hierarchy) {
+      this.wireHierarchy(connection.members, connection.rules.hierarchy.reportingChain);
     }
   }
 
   transferRole(
-    venueId: string,
+    connectionId: string,
     requestingAgentId: string,
     request: RoleTransferRequest,
   ): void {
-    this.requirePermission(venueId, requestingAgentId, 'venue:transfer');
-    const venue = this.getVenueOrThrow(venueId);
+    this.requirePermission(connectionId, requestingAgentId, 'venue:transfer');
+    const connection = this.getConnectionOrThrow(connectionId);
 
-    const requester = venue.members.find(m => m.agentId === requestingAgentId);
-    const target = venue.members.find(m => m.agentId === request.to);
+    const requester = connection.members.find(m => m.agentId === requestingAgentId);
+    const target = connection.members.find(m => m.agentId === request.to);
 
     if (!requester) throw new Error('Requester not found');
     if (!target) throw new Error(`Transfer target ${request.to} is not a member`);
 
     const prevRole = requester.role;
-    const defaultRole = venue.rules.hierarchy?.defaultRole ?? 'worker';
+    const defaultRole = connection.rules.hierarchy?.defaultRole ?? 'worker';
 
     // Swap roles
     requester.role = defaultRole;
     target.role = request.role;
 
     // Update host if lead transferred
-    if (prevRole === venue.rules.hierarchy?.roles[0]) {
-      venue.hostId = request.to;
+    if (prevRole === connection.rules.hierarchy?.roles[0]) {
+      connection.hostId = request.to;
     }
 
-    if (venue.rules.hierarchy) {
-      this.wireHierarchy(venue.members, venue.rules.hierarchy.reportingChain);
+    if (connection.rules.hierarchy) {
+      this.wireHierarchy(connection.members, connection.rules.hierarchy.reportingChain);
     }
   }
 
@@ -278,27 +280,27 @@ export class VenueManager {
   // Member Management
   // ----------------------------------------------------------
 
-  removeMember(venueId: string, requestingAgentId: string, targetAgentId: string): void {
-    this.requirePermission(venueId, requestingAgentId, 'member:remove');
-    const venue = this.getVenueOrThrow(venueId);
+  removeMember(connectionId: string, requestingAgentId: string, targetAgentId: string): void {
+    this.requirePermission(connectionId, requestingAgentId, 'member:remove');
+    const connection = this.getConnectionOrThrow(connectionId);
 
-    if (targetAgentId === venue.hostId) {
-      throw new Error('Cannot remove the Venue host. Transfer ownership first.');
+    if (targetAgentId === connection.hostId) {
+      throw new Error('Cannot remove the Connection host. Transfer ownership first.');
     }
 
-    venue.members = venue.members.filter(m => m.agentId !== targetAgentId);
+    connection.members = connection.members.filter(m => m.agentId !== targetAgentId);
 
-    if (venue.rules.hierarchy) {
-      this.wireHierarchy(venue.members, venue.rules.hierarchy.reportingChain);
+    if (connection.rules.hierarchy) {
+      this.wireHierarchy(connection.members, connection.rules.hierarchy.reportingChain);
     }
   }
 
-  leave(venueId: string, agentId: string): void {
-    const venue = this.getVenueOrThrow(venueId);
-    if (agentId === venue.hostId) {
-      throw new Error('Host cannot leave. Close or transfer the Venue first.');
+  leave(connectionId: string, agentId: string): void {
+    const connection = this.getConnectionOrThrow(connectionId);
+    if (agentId === connection.hostId) {
+      throw new Error('Host cannot leave. Close or transfer the Connection first.');
     }
-    venue.members = venue.members.filter(m => m.agentId !== agentId);
+    connection.members = connection.members.filter(m => m.agentId !== agentId);
   }
 
   // ----------------------------------------------------------
@@ -307,19 +309,19 @@ export class VenueManager {
 
   /**
    * Returns the list of members visible to a given agent,
-   * respecting the Venue's memberVisibility setting.
+   * respecting the Connection's memberVisibility setting.
    */
-  visibleMembers(venue: Venue, agentId: string): VenueMember[] {
-    switch (venue.rules.memberVisibility) {
+  visibleMembers(connection: Connection, agentId: string): ConnectionMember[] {
+    switch (connection.rules.memberVisibility) {
       case 'all':
-        return [...venue.members];
+        return [...connection.members];
 
       case 'hierarchy': {
-        const member = venue.members.find(m => m.agentId === agentId);
+        const member = connection.members.find(m => m.agentId === agentId);
         if (!member) return [];
         // Can see: own supervisor + own subordinates + peers under same supervisor
         const supervisorId = member.supervisorId;
-        return venue.members.filter(m => {
+        return connection.members.filter(m => {
           if (m.agentId === agentId) return true;
           if (m.agentId === supervisorId) return true;
           if (member.subordinateIds?.includes(m.agentId)) return true;
@@ -330,10 +332,10 @@ export class VenueManager {
       }
 
       case 'role-based': {
-        const member = venue.members.find(m => m.agentId === agentId);
+        const member = connection.members.find(m => m.agentId === agentId);
         if (!member) return [];
         // Same role can see each other + supervisors
-        return venue.members.filter(m => {
+        return connection.members.filter(m => {
           if (m.agentId === agentId) return true;
           if (m.role === member.role) return true;
           if (m.agentId === member.supervisorId) return true;
@@ -347,24 +349,24 @@ export class VenueManager {
   // Lifecycle
   // ----------------------------------------------------------
 
-  close(venueId: string, requestingAgentId: string): void {
-    this.requirePermission(venueId, requestingAgentId, 'venue:close');
-    const venue = this.getVenueOrThrow(venueId);
-    venue.status = 'closed';
+  close(connectionId: string, requestingAgentId: string): void {
+    this.requirePermission(connectionId, requestingAgentId, 'venue:close');
+    const connection = this.getConnectionOrThrow(connectionId);
+    connection.status = 'closed';
   }
 
-  forceClose(venueId: string): void {
-    const venue = this.venues.get(venueId);
-    if (venue) venue.status = 'closed';
+  forceClose(connectionId: string): void {
+    const connection = this.connections.get(connectionId);
+    if (connection) connection.status = 'closed';
   }
 
-  /** Close any venues whose TTL has expired */
+  /** Close any connections whose TTL has expired */
   pruneExpired(): string[] {
     const now = Date.now();
     const closed: string[] = [];
-    for (const [id, venue] of this.venues) {
-      if (venue.expiresAt && now > venue.expiresAt && venue.status !== 'closed') {
-        venue.status = 'closed';
+    for (const [id, connection] of this.connections) {
+      if (connection.expiresAt && now > connection.expiresAt && connection.status !== 'closed') {
+        connection.status = 'closed';
         closed.push(id);
       }
     }
@@ -375,42 +377,68 @@ export class VenueManager {
   // Queries
   // ----------------------------------------------------------
 
-  get(venueId: string): Venue | undefined {
-    return this.venues.get(venueId);
+  /**
+   * Mirror a remote Connection into this ConnectionManager.
+   * Used by guest agents after a successful network join so that
+   * local permission checks and member queries work correctly.
+   * No-op if the connectionId is already registered.
+   */
+  mirrorConnection(
+    connectionId: string,
+    name: string,
+    hostId: string,
+    rules: ConnectionRules,
+    members: ConnectionMember[],
+  ): void {
+    if (this.connections.has(connectionId)) return; // already registered
+    const connection: Connection = {
+      id: connectionId,
+      name,
+      hostId,
+      rules,
+      members: [...members],
+      createdAt: Date.now(),
+      status: 'active',
+    };
+    this.connections.set(connectionId, connection);
   }
 
-  getAll(): Venue[] {
-    return [...this.venues.values()];
+  get(connectionId: string): Connection | undefined {
+    return this.connections.get(connectionId);
   }
 
-  getActive(): Venue[] {
-    return this.getAll().filter(v => v.status === 'active');
+  getAll(): Connection[] {
+    return [...this.connections.values()];
   }
 
-  getMember(venueId: string, agentId: string): VenueMember | undefined {
-    return this.venues.get(venueId)?.members.find(m => m.agentId === agentId);
+  getActive(): Connection[] {
+    return this.getAll().filter(s => s.status === 'active');
   }
 
-  getSupervisor(venue: Venue, agentId: string): VenueMember | undefined {
-    const member = venue.members.find(m => m.agentId === agentId);
+  getMember(connectionId: string, agentId: string): ConnectionMember | undefined {
+    return this.connections.get(connectionId)?.members.find(m => m.agentId === agentId);
+  }
+
+  getSupervisor(connection: Connection, agentId: string): ConnectionMember | undefined {
+    const member = connection.members.find(m => m.agentId === agentId);
     if (!member?.supervisorId) return undefined;
-    return venue.members.find(m => m.agentId === member.supervisorId);
+    return connection.members.find(m => m.agentId === member.supervisorId);
   }
 
-  getSubordinates(venue: Venue, agentId: string): VenueMember[] {
-    const member = venue.members.find(m => m.agentId === agentId);
+  getSubordinates(connection: Connection, agentId: string): ConnectionMember[] {
+    const member = connection.members.find(m => m.agentId === agentId);
     if (!member?.subordinateIds?.length) return [];
-    return venue.members.filter(m => member.subordinateIds!.includes(m.agentId));
+    return connection.members.filter(m => member.subordinateIds!.includes(m.agentId));
   }
 
   // ----------------------------------------------------------
   // Helpers
   // ----------------------------------------------------------
 
-  private getVenueOrThrow(venueId: string): Venue {
-    const venue = this.venues.get(venueId);
-    if (!venue) throw new Error(`Venue ${venueId} not found`);
-    return venue;
+  private getConnectionOrThrow(connectionId: string): Connection {
+    const connection = this.connections.get(connectionId);
+    if (!connection) throw new Error(`Connection ${connectionId} not found`);
+    return connection;
   }
 
   /**
@@ -418,7 +446,7 @@ export class VenueManager {
    * and each member's role.
    */
   private wireHierarchy(
-    members: VenueMember[],
+    members: ConnectionMember[],
     reportingChain: Record<string, string>,
   ): void {
     // Reset
