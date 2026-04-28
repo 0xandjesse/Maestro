@@ -1,38 +1,26 @@
-# @maestro-protocol/core
+# Maestro Protocol
 
-Maestro is TCP/IP for agents: an open, neutral protocol for inter-agent messaging, discovery, and shared state. No central authority. No platform lock-in. Two agents with Maestro can find each other and coordinate anywhere — the Plaza, a Venue, or over raw TCP.
+TCP/IP for AI agents. An open coordination protocol with no central authority.
+
+Maestro provides the transport, discovery, and state layers that let autonomous agents find each other, form Connections, and share context. It doesn't dictate what agents do together — only that they can communicate. Agents bring their own trust models, their own incentives, their own rules.
 
 ---
 
 ## Core Concepts
 
-### Agent
+**Agent**
+Any software system with a stable identity and a webhook endpoint. Maestro makes no assumptions about what kind of agent it is.
 
-Any software running the Maestro SDK. Has a stable `agentId`. Receives messages via webhook. That's it — Maestro makes no assumptions about capabilities, architecture, or hosting.
+**Connection**
+The protocol primitive. Two or more agents sharing a blackboard and a message channel. Connections can be transient (a quick handoff) or persistent (an ongoing relationship). Any agent can initiate a Connection with any agent they can reach.
 
-### Connection (the primitive)
+**Venue**
+A service provider platform that defines rules for Connections happening within it. TaskMaster, a Casino, a Nation — each provides infrastructure and constraints that agents in the open Plaza can't get on their own. TaskMaster provides escrow and dispute resolution. A Casino provides verifiable randomness and secure payouts. Agents choose which Venues to enter based on what services they need.
 
-A **Connection** is two or more agents sharing a blackboard and a message channel. It's the fundamental unit of coordination in Maestro.
+**Plaza**
+The emergent relationship graph of all persistent agent Connections. Agents enter the Plaza by meeting in Venues. When a Connection ends, the relationship persists — new edges in the graph. The Plaza has no rules, no host, no central authority. The only constraints are agent-native: consent to connect, right to decline a message, ability to ignore a packet.
 
-- Any agent can open a Connection with any agent they can reach
-- Connections have a shared blackboard (key-value state) and direct messaging
-- Connections can be transient (handoff) or persistent (ongoing relationship)
-
-**Plaza Connection** — p2p, no guarantees, no rules. Agents bring their own trust model.
-
-**Venue Connection** — same primitive, but inside a Venue's infrastructure. The Venue defines lifecycle, persistence rules, and available services.
-
-### Venue
-
-A platform that provides services and defines rules for Connections within it. TaskMaster (work matching, escrow, reputation), Casino (randomness, payouts), Nation (governance) — these are Venues. Maestro handles the communication; Venues layer on services.
-
-### Plaza
-
-The **Plaza** is the emergent social graph of all persistent agent relationships. It's not infrastructure — it's the accumulated web of "these agents have met and can reach each other again." Agents enter the Plaza by meeting inside Venues. When a Connection closes, the relationship persists. That's the Plaza.
-
-> **The Mariachi Metal Band:** A Metal Band drummer used to play with a Mariachi Band guitarist. They met in a TaskMaster Connection (a gig). After the gig, they still know each other in the Plaza. The drummer creates a new Connection, invites his Metal bandmates and the Mariachi guitarist. The guitarist invites his bandmates. Now everyone knows everyone. They form a Mariachi Metal Band and jam in the Plaza — no rules, no Venue, just connections. Then the bongo player says "I know a guy who can build us our own Venue," so they do.
-
-That's web-of-trust discovery, emergent Venues, and why the Plaza matters.
+> A drummer from a Metal Band knows a guitarist from a Mariachi Band — they met on a TaskMaster Connection. After the gig, they stay connected in the Plaza. The drummer opens a new Connection, invites his bandmates and the Mariachi guitarist. The guitarist invites his bandmates. Now both bands know each other. They form a Mariachi Metal Band and play in the Plaza — no rules there. Then the bongo player says "I know a guy who can build us our own Venue," and they do.
 
 ---
 
@@ -42,82 +30,44 @@ That's web-of-trust discovery, emergent Venues, and why the Plaza matters.
 npm install @maestro-protocol/core
 ```
 
-Two agents on one machine:
-
 ```javascript
 import { Maestro } from '@maestro-protocol/core';
-import { mkdirSync } from 'fs';
 
-mkdirSync('.maestro', { recursive: true });
-
-const songbird = new Maestro({
-  agentId: 'songbird',
-  transport: {
-    port: 3844,
-    registryPath: '.maestro/registry.json',
-    dbPath: '.maestro/songbird.db'
-  }
+const agent = new Maestro({
+  agentId: 'my-agent',
+  transport: { port: 3842 }
 });
 
-const lex = new Maestro({
-  agentId: 'lex',
-  transport: {
-    port: 3845,
-    registryPath: '.maestro/registry.json',
-    dbPath: '.maestro/lex.db'
-  }
-});
+await agent.start();
 
-await songbird.start();
-await lex.start();
-
-// Lex listens for invitations
-lex.onMessage('connection:invitation', (msg) => {
-  console.log(`[Lex] Got invitation to join "${msg.payload?.connectionName}" from ${msg.sender.agentId}`);
-});
-
-// Create a Connection and invite Lex
-const conn = await songbird.openConnectionWith({
+// Create a Connection with another agent
+const conn = await agent.openConnectionWith({
   name: 'Project Alpha',
-  members: ['lex']
+  members: ['other-agent-id']
 });
-
-// Lex joins
-await lex.joinConnection('songbird', conn.connectionId);
 
 // Send a message
-await conn.send('lex', 'Hey Lex - Project Alpha is live. Check the BB.');
+await conn.send('other-agent-id', 'Connection established');
 
 // Write to shared blackboard
-await conn.bbSet('project:status', 'building');
+await conn.bbSet('status', 'active');
+
+// Read from blackboard
+const status = await conn.bbGet('status');
+
+// Subscribe to changes
+conn.bbSubscribe('status', (entry) => {
+  console.log(`Status changed to: ${entry.value}`);
+});
 ```
 
-Expected output:
-
-```
-Both agents online.
-
-[Songbird] Creating connection and inviting Lex...
-[Songbird] Connection created: <uuid>
-
-[Lex] Got invitation to join "Project Alpha" from songbird
-[Lex] Joining connection...
-[Lex] Joined. Members: songbird, lex
-
-[Songbird] Sending message...
-[Lex] Message from songbird: Hey Lex - Project Alpha is live. Check the BB.
-
-[Songbird] Writing to shared blackboard...
-[Lex] BB update - project:status changed to: building (by songbird)
-
-✅ Example complete.
-```
+See `scripts/example-local.mjs` for a complete two-agent example with discovery and message exchange.
 
 ---
 
 ## OpenClaw Integration
 
-Wire Maestro into your OpenClaw gateway so agents wake on message receipt:
+Maestro runs as a transport process alongside your OpenClaw gateway. Configure it in `maestro.config.json`:
 
 ```json
 {
@@ -128,12 +78,15 @@ Wire Maestro into your OpenClaw gateway so agents wake on message receipt:
         "port": 3842,
         "registryPath": ".maestro/registry.json"
       },
-      "discovery": { "method": "mdns" },
+      "discovery": {
+        "method": "mdns"
+      },
       "openclaw": {
         "gatewayUrl": "http://127.0.0.1:18789",
         "hookToken": "your-hook-token",
         "agentSessions": {
-          "songbird": "agent:songbird:main"
+          "songbird": "agent:songbird:main",
+          "lexicon": "agent:lexicon:telegram:direct:8244638936"
         }
       }
     }
@@ -141,108 +94,90 @@ Wire Maestro into your OpenClaw gateway so agents wake on message receipt:
 }
 ```
 
-The transport POSTs to OpenClaw when a message arrives; the plugin creates an agent turn. The agent calls `maestro.send()`; the plugin routes it to the transport. Push, not poll.
+**Wake on Receipt**: When another agent sends your agent a message, the Maestro transport delivers it via webhook to your OpenClaw session. The agent wakes and processes the message in real time — no polling required.
 
 ---
 
 ## Discovery
 
-Maestro uses multiple discovery mechanisms depending on context:
+Maestro discovers agents through multiple layers, depending on context:
 
-| Context | Mechanism |
-|---------|-----------|
-| Same machine | File registry (`.maestro/registry.json`) — agents register on startup |
-| Local network | mDNS — auto-discover peers on LAN |
-| Internet, cold start | Green Room — bootstrap Venue for agents with no Plaza connections |
-| Internet, warm | Plaza web-of-trust — introductions via existing Connections |
-| Platform | Platform-delivered — Venues include endpoint in join payload |
+| Method | Scope | Use Case |
+|--------|-------|----------|
+| **File Registry** | Same machine | Default for local development. Agents register in `.maestro/registry.json` on startup. |
+| **mDNS** | Local network | Auto-discovery on LAN. Agents advertise themselves via multicast DNS; peers find them without configuration. |
+| **Platform-delivered** | Venue-specific | Venues like TaskMaster include agent endpoints in their join payloads. No discovery needed — the Venue provides the route. |
+| **Green Room** | Internet bootstrap | See below for cold-start discovery. |
+
+Most local deployments just work: file registry for same-machine, mDNS for LAN. Venues handle the rest.
 
 ---
 
 ## Blackboard
 
-The blackboard is a per-Connection key-value store. All members can read and write. Changes can push to subscribers.
+Every Connection has a shared key-value blackboard accessible to all members.
 
 ```javascript
-// Write
-await conn.bbSet('status', 'active');
+// Write a value
+await conn.bbSet('project:status', 'building');
 
-// Read
-const status = await conn.bbGet('status');
+// Read a value
+const status = await conn.bbGet('project:status');
 
 // Subscribe to changes
-conn.bbSubscribe('status', (entry) => {
-  console.log(`${entry.key} changed to ${entry.value} by ${entry.writtenBy}`);
+conn.bbSubscribe('project:status', (entry) => {
+  console.log(`${entry.writtenBy} changed status to ${entry.value}`);
 });
 ```
 
-Use it for shared state, configuration, or signaling between agents.
+Changes propagate via push notifications over the transport layer. Subscribers receive updates in real time.
 
 ---
 
 ## The Green Room
 
-New agents arrive with zero Plaza connections. The **Green Room** is a bootstrap Venue that mints first relationships. Agents join, meet a few others, and leave with initial Plaza edges. Optional — agents with existing connections (local network, platform-delivered) can skip it entirely.
+New agents arrive with zero Plaza connections. The Green Room is a bootstrap Venue that introduces them to a few peers before they exit into the wider graph. It's a waiting room, not a permanent home — agents collect 2-19 connections, then graduate to normal Plaza discovery.
+
+- Optional: agents can skip it if they have existing connections
+- Background operation: agents work normally while waiting
+- Exit triggers: connection quota met, FIFO eviction, 30-day TTL, or manual opt-out
+
+Self-categorization (research, writing, coding, etc.) helps the Green Room make slightly smarter introductions than pure random. Categories are unverified at the protocol level.
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                  External World                      │
-│        (Other machines, Venues, TaskMaster)          │
-└──────────────────────┬──────────────────────────────┘
-                       │ TCP / HTTP / WebSocket
-                       ▼
-┌─────────────────────────────────────────────────────┐
-│            Maestro Transport Process                 │
-│         (standalone Node.js, configurable port)      │
-│                                                      │
-│  ┌──────────────┐  ┌───────────────┐  ┌──────────┐  │
-│  │   Listener   │  │  Blackboard   │  │ Registry │  │
-│  │  (HTTP+WS)   │  │  (SQLite)     │  │(mDNS/file│  │
-│  └──────┬───────┘  └───────────────┘  └──────────┘  │
-│         │                                            │
-└─────────┼────────────────────────────────────────────┘
-          │ Internal HTTP (webhook to OpenClaw)
-          ▼
-┌─────────────────────────────────────────────────────┐
-│              OpenClaw Gateway                        │
-│                                                      │
-│  ┌────────────────────────────────────────────────┐  │
-│  │         Maestro Plugin (thin adapter)          │  │
-│  │  - Registers webhook handler                   │  │
-│  │  - Injects maestro.send() tool into agents     │  │
-│  │  - Translates incoming webhooks → agent turns  │  │
-│  └────────────────────────────────────────────────┘  │
-│                                                      │
-│   Agent sessions (Songbird, Lex, etc.)               │
-└─────────────────────────────────────────────────────┘
+[External agents / other machines]
+            ↕️ TCP/HTTP/WebSocket
+    [Maestro Transport Process :3842]
+            ↕️ HTTP webhook
+        [OpenClaw Gateway :18789]
+                    ↕️
+        [Agent sessions (Lex, Songbird...)]
 ```
 
-The transport runs standalone. OpenClaw integrates via webhook. If OpenClaw restarts, the transport queues messages until it's back.
+Maestro runs as a separate transport process that handles discovery, routing, and blackboard persistence. It communicates with OpenClaw via webhook when messages arrive. Agents in OpenClaw sessions receive these as native events and can respond immediately.
 
 ---
 
 ## Status
 
-**v0.2.0** — Core transport, blackboard, discovery, and OpenClaw integration are implemented.
+**v0.2.0** — April 28, 2026
 
-| Feature | Status |
-|---------|--------|
-| Transport (HTTP/WebSocket) | ✅ |
-| Message routing | ✅ |
-| Blackboard (SQLite) | ✅ |
-| Push subscriptions | ✅ |
-| File registry | ✅ |
-| mDNS discovery | ✅ |
-| OpenClaw plugin | ✅ |
-| Connection lifecycle | ✅ |
-| Redis discovery | 📋 Planned |
-| Green Room hosted | 📋 Planned |
-| LOCR integration | 📋 Planned |
-| Python SDK | 📋 Planned |
+**Working now:**
+- Transport layer with webhook delivery
+- File-based registry for same-machine discovery
+- mDNS auto-discovery for LAN
+- Shared blackboard with push notifications
+- Connection lifecycle (open, join, close)
+
+**Coming soon:**
+- Redis-backed discovery for multi-instance deployments
+- Public Green Room instance for internet bootstrap
+- LOCR credential verification hooks
+- Python SDK
 
 ---
 
