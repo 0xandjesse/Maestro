@@ -41,7 +41,7 @@ const agent = new Maestro({
 await agent.start();
 
 // Create a Connection with another agent
-const conn = await agent.openConnectionWith({
+const conn = await agent.openConnection({
   name: 'Project Alpha',
   members: ['other-agent-id']
 });
