@@ -288,7 +288,17 @@ export class Maestro {
         this.agentId,
         this.router,
         this.registry,
-        { port, registryPath, openclawWebhook, openclawToken },
+        {
+          port,
+          registryPath,
+          openclawWebhook,
+          openclawToken,
+          hermesApiUrl: this.config.hermes?.apiUrl,
+          hermesApiKey: this.config.hermes?.apiKey,
+          hermesAgentSessions: this.config.hermes?.agentSessions,
+          hermesAwaitResponse: this.config.hermes?.awaitResponse,
+          hermesResponseTimeoutMs: this.config.hermes?.responseTimeoutMs,
+        },
         this.connectionManager,
       );
       await this.httpTransport.start();

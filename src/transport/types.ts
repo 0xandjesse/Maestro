@@ -108,6 +108,19 @@ export interface MaestroConfig {
     hookToken: string;
     agentSessions?: Record<string, string>;
   };
+  /** Hermes Agent integration. When present, wakes Hermes agent sessions on inbound messages. */
+  hermes?: {
+    /** Base URL of the Hermes API server, e.g. http://192.168.56.101:8642 */
+    apiUrl: string;
+    /** Bearer token (API_SERVER_KEY in Hermes .env) */
+    apiKey: string;
+    /** Map of Maestro agentId → Hermes conversation name */
+    agentSessions?: Record<string, string>;
+    /** If true, awaits run completion before returning. Default: false */
+    awaitResponse?: boolean;
+    /** Timeout ms for awaited responses. Default: 30000 */
+    responseTimeoutMs?: number;
+  };
 }
 
 // ----------------------------------------------------------

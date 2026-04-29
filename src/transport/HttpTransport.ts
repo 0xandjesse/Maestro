@@ -19,6 +19,7 @@ import { MessageRouter } from './MessageRouter.js';
 import { LocalRegistry } from './LocalRegistry.js';
 import { deliverMessage } from './NetworkDelivery.js';
 import { OpenClawAdapter, OpenClawAdapterConfig } from '../plugin/OpenClawAdapter.js';
+import { HermesAdapter } from '../plugin/HermesAdapter.js';
 import { SQLiteBlackboard } from '../blackboard/SQLiteBlackboard.js';
 import { BlackboardEntry } from '../blackboard/types.js';
 import { ConnectionManager } from '../connection/ConnectionManager.js';
@@ -30,6 +31,16 @@ export interface HttpTransportConfig {
   registryPath?: string;
   openclawWebhook?: string;
   openclawToken?: string;
+  /** Hermes API server base URL, e.g. http://192.168.56.101:8642 */
+  hermesApiUrl?: string;
+  /** Hermes API bearer token */
+  hermesApiKey?: string;
+  /** Map of agentId → Hermes conversation name */
+  hermesAgentSessions?: Record<string, string>;
+  /** Await Hermes run completion. Default: false */
+  hermesAwaitResponse?: boolean;
+  /** Timeout ms for awaited Hermes responses */
+  hermesResponseTimeoutMs?: number;
 }
 
 export class HttpTransport {
@@ -37,6 +48,7 @@ export class HttpTransport {
   private server: Server | null = null;
   private startedAt: number | null = null;
   private openclawAdapter: OpenClawAdapter | null = null;
+  private hermesAdapter: HermesAdapter | null = null;
   private blackboards = new Map<string, SQLiteBlackboard>();
 
   constructor(
@@ -57,6 +69,16 @@ export class HttpTransport {
         hookToken: config.openclawToken,
       };
       this.openclawAdapter = new OpenClawAdapter(adapterConfig);
+    }
+    // Optionally wire Hermes adapter
+    if (config.hermesApiUrl && config.hermesApiKey) {
+      this.hermesAdapter = new HermesAdapter({
+        apiUrl: config.hermesApiUrl,
+        apiKey: config.hermesApiKey,
+        agentSessions: config.hermesAgentSessions,
+        awaitResponse: config.hermesAwaitResponse,
+        responseTimeoutMs: config.hermesResponseTimeoutMs,
+      });
     }
   }
 
@@ -172,6 +194,12 @@ export class HttpTransport {
           // Don't await - fire and forget
           this.openclawAdapter.wakeAgent(this.agentId, message).catch((err: unknown) => {
             console.error('[HttpTransport] OpenClaw wake failed:', err);
+          });
+        }
+        // Wake Hermes agent session if adapter is configured
+        if (this.hermesAdapter) {
+          this.hermesAdapter.wakeAgent(this.agentId, message).catch((err: unknown) => {
+            console.error('[HttpTransport] Hermes wake failed:', err);
           });
         }
 
