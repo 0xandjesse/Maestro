@@ -70,7 +70,7 @@ export class HttpTransport {
       };
       this.openclawAdapter = new OpenClawAdapter(adapterConfig);
     }
-    // Optionally wire Hermes adapter
+    // Optionally wire Hermes adapter with reply-routing callback
     if (config.hermesApiUrl && config.hermesApiKey) {
       this.hermesAdapter = new HermesAdapter({
         apiUrl: config.hermesApiUrl,
@@ -78,6 +78,22 @@ export class HttpTransport {
         agentSessions: config.hermesAgentSessions,
         awaitResponse: config.hermesAwaitResponse,
         responseTimeoutMs: config.hermesResponseTimeoutMs,
+        onResponse: async (reply) => {
+          // Route Hermes reply back to the original sender as a MaestroMessage
+          const replyMessage: import('../types/index.js').MaestroMessage = {
+            id: randomUUID(),
+            type: 'direct',
+            content: reply.output,
+            sender: { agentId: reply.fromAgentId },
+            recipient: reply.toAgentId,
+            timestamp: Date.now(),
+            version: '3.2',
+          };
+          console.log(`[HttpTransport] Hermes reply from ${reply.fromAgentId} → ${reply.toAgentId}: ${reply.output.slice(0, 80)}...`);
+          await this.send(replyMessage).catch((err: unknown) => {
+            console.error('[HttpTransport] Failed to deliver Hermes reply:', err);
+          });
+        },
       });
     }
   }

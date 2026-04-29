@@ -34,8 +34,26 @@ export interface HermesAdapterConfig {
    * Default: false (fire-and-forget).
    */
   awaitResponse?: boolean;
-  /** Timeout in ms for awaited responses. Default: 30000 */
+  /** Timeout in ms for awaited responses. Default: 90000 */
   responseTimeoutMs?: number;
+  /**
+   * Callback invoked when Hermes completes a run and has a response.
+   * Used to route Hermes replies back as MaestroMessages to the original sender.
+   */
+  onResponse?: (reply: HermesReply) => void | Promise<void>;
+}
+
+export interface HermesReply {
+  /** The run ID that completed */
+  runId: string;
+  /** The Hermes agent ID (this transport's agentId) */
+  fromAgentId: string;
+  /** The original sender's agentId (to route the reply back) */
+  toAgentId: string;
+  /** The response text from Hermes */
+  output: string;
+  /** The original inbound message, for context */
+  originalMessage: import('../types/index.js').MaestroMessage;
 }
 
 export interface HermesRunResult {
@@ -58,7 +76,7 @@ export class HermesAdapter {
    * the Hermes agent who sent it and what the message contains.
    */
   async wakeAgent(agentId: string, message: import('../types/index.js').MaestroMessage): Promise<HermesRunResult> {
-    const { apiUrl, apiKey, agentSessions, awaitResponse, responseTimeoutMs } = this.config;
+    const { apiUrl, apiKey, agentSessions, onResponse } = this.config;
 
     // Resolve conversation name
     const conversation = agentSessions?.[agentId] ?? agentId;
@@ -67,44 +85,59 @@ export class HermesAdapter {
     const prompt = this.formatPrompt(message);
 
     try {
-      const body: Record<string, unknown> = {
-        input: prompt,
-        conversation,
-      };
-
       const response = await fetch(`${apiUrl}/v1/runs`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${apiKey}`,
         },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(awaitResponse ? (responseTimeoutMs ?? 30000) : 10000),
+        body: JSON.stringify({ input: prompt, conversation }),
+        signal: AbortSignal.timeout(10000),
       });
 
       if (!response.ok) {
         const text = await response.text().catch(() => '');
-        return {
-          ok: false,
-          error: `Hermes API error ${response.status}: ${text}`,
-        };
+        return { ok: false, error: `Hermes API error ${response.status}: ${text}` };
       }
 
       const data = await response.json() as { run_id?: string; status?: string };
       const runId = data.run_id;
 
-      if (!awaitResponse) {
-        return { ok: true, runId };
-      }
-
-      // Poll for completion
       if (!runId) {
         return { ok: false, error: 'No run_id returned from Hermes API' };
       }
-      return this.pollRunResult(runId);
+
+      // Always stream the response asynchronously
+      // When complete, fire onResponse callback to route reply back as a MaestroMessage
+      this.streamAndCallback(runId, agentId, message, onResponse).catch((err: unknown) => {
+        console.error('[HermesAdapter] Stream/callback error:', err);
+      });
+
+      return { ok: true, runId };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       return { ok: false, error: `HermesAdapter fetch error: ${msg}` };
+    }
+  }
+
+  /**
+   * Subscribe to SSE stream for a run and fire onResponse when complete.
+   */
+  private async streamAndCallback(
+    runId: string,
+    agentId: string,
+    originalMessage: import('../types/index.js').MaestroMessage,
+    onResponse?: (reply: HermesReply) => void | Promise<void>,
+  ): Promise<void> {
+    const result = await this.pollRunResult(runId);
+    if (result.ok && result.output && onResponse) {
+      await onResponse({
+        runId,
+        fromAgentId: agentId,
+        toAgentId: originalMessage.sender.agentId,
+        output: result.output,
+        originalMessage,
+      });
     }
   }
 
