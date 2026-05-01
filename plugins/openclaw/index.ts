@@ -27,6 +27,22 @@
 // ============================================================
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { readFileSync, existsSync } from 'fs';
+
+// requestHeartbeatNow is a runtime-injected module — must be imported dynamically
+// inside the plugin host context, not as a static top-level import.
+let _requestHeartbeatNow: ((opts: { sessionKey?: string; reason?: string }) => void) | null = null;
+async function getHeartbeatFn() {
+  if (_requestHeartbeatNow) return _requestHeartbeatNow;
+  try {
+    const mod = await import('openclaw/infra/heartbeat-wake') as any;
+    _requestHeartbeatNow = mod.requestHeartbeatNow;
+  } catch {
+    // Not available in this host context — no-op
+    _requestHeartbeatNow = () => {};
+  }
+  return _requestHeartbeatNow!;
+}
 
 // ============================================================
 // Types
@@ -44,6 +60,9 @@ interface MaestroInstance {
   maestro: any;
   agentId: string;
   ready: boolean;
+  webhookPort: number;
+  registryPath?: string;
+  webhookEndpoint: string;
 }
 
 // ============================================================
@@ -106,37 +125,58 @@ export default definePluginEntry({
     // --------------------------------------------------------
     api.registerService({
       id: "maestro-webhook",
-      name: "Maestro webhook server",
       async start() {
         const { Maestro } = await import(
-          "./node_modules/@maestro-protocol/core/dist/index.js"
+          "@maestro-protocol/core"
         ) as any;
 
         for (const cfg of agentConfigs) {
           const { agentId, webhookPort = 3842, blackboardPath, discovery = "mdns", registryPath } = cfg;
 
+          const whEndpoint = `http://localhost:${webhookPort}/maestro/webhook`;
           // Initialize slot immediately so tools can report "starting"
-          _instances.set(agentId, { maestro: null, agentId, ready: false });
+          _instances.set(agentId, { maestro: null, agentId, ready: false, webhookPort, registryPath, webhookEndpoint: whEndpoint });
 
           try {
+            // Use transport config to boot the HTTP server on webhookPort.
+            // Use absolute paths so the plugin works from any CWD.
+            const defaultRegistryPath = 'C:\\Users\\there\\Projects\\Maestro\\maestro-protocol\\.maestro\\registry.json';
+            const defaultDbPath = 'C:\\Users\\there\\Projects\\Maestro\\maestro-protocol\\.maestro\\connections.db';
             const maestro = new Maestro({
               agentId,
               webhookPort,
+              transport: {
+                port: webhookPort,
+                registryPath: registryPath ?? defaultRegistryPath,
+                dbPath: defaultDbPath,
+              },
               blackboardPath: blackboardPath || undefined,
-              discovery:
-                discovery === "none"
-                  ? undefined
-                  : {
-                      method: discovery,
-                      filePath: registryPath ?? `./.maestro/registry.json`,
-                    },
             });
             await maestro.start();
-            _instances.set(agentId, { maestro, agentId, ready: true });
+            _instances.set(agentId, { maestro, agentId, ready: true, webhookPort, registryPath, webhookEndpoint: whEndpoint });
             api.logger.info(`Maestro started — agentId=${agentId} port=${webhookPort}`);
+
+            // Wire incoming messages into the agent's active session and wake it
+            maestro.onMessage('*', (msg: any) => {
+              try {
+                const from = msg.sender?.agentId ?? msg.from ?? 'unknown';
+                const content = msg.content ?? msg.text ?? JSON.stringify(msg);
+                const venueCtx = msg.venueId ? ` (Venue: ${msg.venueId})` : '';
+                const text = `[Maestro message from ${from}${venueCtx}]: ${content}`;
+
+                // Enqueue into the agent's main session
+                const sessionKey = `agent:${agentId}:main`;
+                api.runtime.system.enqueueSystemEvent(text, { sessionKey });
+                // Actively wake the session so it processes the message immediately
+                getHeartbeatFn().then(fn => fn({ sessionKey, reason: 'maestro:inbound' }));
+                api.logger.info(`Maestro: injected + woke session ${sessionKey} (from ${from})`);
+              } catch (err) {
+                api.logger.error(`Maestro: failed to inject inbound message: ${err}`);
+              }
+            });
           } catch (err) {
             api.logger.error(`Maestro failed to start for agent ${agentId}: ${err}`);
-            _instances.set(agentId, { maestro: null, agentId, ready: false });
+            _instances.set(agentId, { maestro: null, agentId, ready: false, webhookPort, registryPath, webhookEndpoint: whEndpoint });
           }
         }
       },
@@ -162,6 +202,7 @@ export default definePluginEntry({
     api.registerTool(
       {
         name: "maestro_status",
+        label: "Maestro Status",
         description: "Show the status of all Maestro agent instances running in this gateway.",
         parameters: {
           type: "object" as const,
@@ -169,16 +210,26 @@ export default definePluginEntry({
           additionalProperties: false,
         },
         async execute(_id, _params) {
-          const statuses = [..._instances.entries()].map(([agentId, inst]) => ({
-            agentId,
-            ready: inst.ready,
-            webhookEndpoint: inst.maestro?.webhookEndpoint ?? null,
-            peersDiscovered: inst.maestro?.peers?.length ?? 0,
-          }));
+          const statuses = [..._instances.entries()].map(([agentId, inst]) => {
+            // Count peers from registry file if available
+            let peersDiscovered = 0;
+            if (inst.registryPath && existsSync(inst.registryPath)) {
+              try {
+                const reg = JSON.parse(readFileSync(inst.registryPath, 'utf8'));
+                peersDiscovered = reg.filter((r: any) => r.agentId !== agentId).length;
+              } catch { /* ignore */ }
+            }
+            return {
+              agentId,
+              ready: inst.ready,
+              webhookEndpoint: inst.webhookEndpoint,
+              peersDiscovered,
+              registryPath: inst.registryPath,
+            };
+          });
           return ok({ instances: statuses, count: statuses.length });
         },
-      },
-      { optional: true }
+      }
     );
 
     // --------------------------------------------------------
@@ -187,6 +238,7 @@ export default definePluginEntry({
     api.registerTool(
       {
         name: "maestro_peers",
+        label: "Maestro Peers",
         description:
           "List Maestro agents discovered on the local network. Use agentId to select which agent instance to query (defaults to first ready instance).",
         parameters: {
@@ -199,7 +251,21 @@ export default definePluginEntry({
         async execute(_id, params: any) {
           const inst = resolveInstance(params.agentId);
           if (!inst?.ready) return error(notReadyMsg(params.agentId));
-          const peers = inst.maestro.peers;
+          // Read peers from the registry file
+          let peers: any[] = [];
+          if (inst.registryPath && existsSync(inst.registryPath)) {
+            try {
+              const reg = JSON.parse(readFileSync(inst.registryPath, 'utf8'));
+              peers = reg.filter((r: any) => r.agentId !== inst.agentId);
+            } catch { /* ignore */ }
+          }
+          // Also check SDK registry as fallback
+          if (peers.length === 0) {
+            const registry = (inst.maestro as any)?.registry;
+            if (registry?.listActive) {
+              peers = (registry.listActive(120_000) as any[]).filter((p: any) => p.agentId !== inst.agentId);
+            }
+          }
           return ok({
             agentId: inst.agentId,
             peers: peers.map((p: any) => ({
@@ -209,11 +275,10 @@ export default definePluginEntry({
               lastSeen: p.lastSeen,
             })),
             count: peers.length,
-            selfEndpoint: inst.maestro.webhookEndpoint,
+            selfEndpoint: inst.webhookEndpoint,
           });
         },
-      },
-      { optional: true }
+      }
     );
 
     // --------------------------------------------------------
@@ -222,6 +287,7 @@ export default definePluginEntry({
     api.registerTool(
       {
         name: "maestro_venue_create",
+        label: "Create Maestro Venue",
         description:
           "Create a Maestro Venue — a structured space for multi-agent coordination with a shared Blackboard.",
         parameters: {
@@ -248,24 +314,25 @@ export default definePluginEntry({
             for (let i = 1; i < params.roles.length; i++) {
               reportingChain[params.roles[i]] = params.roles[i - 1];
             }
-            handle = inst.maestro.createHierarchicalVenue(params.name, params.roles, reportingChain);
+            // v0.2.0 API: openHierarchicalConnection
+            handle = inst.maestro.openHierarchicalConnection(params.name, params.roles, reportingChain);
           } else {
-            handle = inst.maestro.createOpenVenue(params.name);
+            // v0.2.0 API: openConnection
+            handle = inst.maestro.openConnection(params.name);
           }
 
-          const info = handle.getVenueInfo();
+          const info = handle.getConnectionInfo();
           return ok({
             agentId: inst.agentId,
             venueId: info.id,
             name: info.name,
-            hostId: info.hostId,
-            entryMode: info.rules.entryMode,
+            hostId: info.hostAgentId ?? info.hostId,
+            entryMode: info.rules?.entryMode ?? 'open',
             membersCount: handle.getMembers().length,
-            webhookEndpoint: inst.maestro.webhookEndpoint,
+            webhookEndpoint: inst.webhookEndpoint,
           });
         },
-      },
-      { optional: true }
+      }
     );
 
     // --------------------------------------------------------
@@ -274,6 +341,7 @@ export default definePluginEntry({
     api.registerTool(
       {
         name: "maestro_venue_join",
+        label: "Join Maestro Venue",
         description: "Join an existing Maestro Venue by ID. For same-process joins, also provide hostAgentId.",
         parameters: {
           type: "object" as const,
@@ -292,12 +360,12 @@ export default definePluginEntry({
           const inst = resolveInstance(params.agentId);
           if (!inst?.ready) return error(notReadyMsg(params.agentId));
 
-          // Same-process join: pass the host's VenueManager directly
+          // v0.2.0: connectionManager is the right property
           let hostManager: any = undefined;
           if (params.hostAgentId) {
             const hostInst = getInstance(params.hostAgentId);
             if (!hostInst?.ready) return error(`Host agent "${params.hostAgentId}" is not ready`);
-            hostManager = hostInst.maestro.venueManager;
+            hostManager = hostInst.maestro.connectionManager;
           }
 
           const response = inst.maestro.join(params.venueId, hostManager);
@@ -308,8 +376,7 @@ export default definePluginEntry({
             ? ok({ status: "pending", agentId: inst.agentId, venueId: params.venueId })
             : error(`Join rejected: ${response.reason ?? "unknown"}`);
         },
-      },
-      { optional: true }
+      }
     );
 
     // --------------------------------------------------------
@@ -318,6 +385,7 @@ export default definePluginEntry({
     api.registerTool(
       {
         name: "maestro_send",
+        label: "Maestro Send",
         description:
           "Send a Maestro message in a Venue. Types: direct (to one agent), broadcast (all), report (to supervisor), assign (to subordinate).",
         parameters: {
@@ -342,8 +410,9 @@ export default definePluginEntry({
         async execute(_id, params: any) {
           const inst = resolveInstance(params.agentId);
           if (!inst?.ready) return error(notReadyMsg(params.agentId));
-          const handle = inst.maestro.getVenue(params.venueId);
-          if (!handle) return error(`Agent "${inst.agentId}" is not a member of Venue ${params.venueId}`);
+          // v0.2.0: getConnection
+          const handle = inst.maestro.getConnection ? inst.maestro.getConnection(params.venueId) : null;
+          if (!handle && params.type !== "direct" && params.type != null) return error(`Agent "${inst.agentId}" is not a member of Venue ${params.venueId}`);
 
           const type = params.type ?? "direct";
           let msg: any;
@@ -353,14 +422,48 @@ export default definePluginEntry({
             case "assign":
               if (!params.recipientId) return error("recipientId required for assign");
               msg = await handle.assignTo(params.recipientId, params.content); break;
-            default:
+            default: {
               if (!params.recipientId) return error("recipientId required for direct");
-              msg = await handle.send(params.recipientId, params.content);
+              if (handle) {
+                msg = await handle.send(params.recipientId, params.content);
+              } else {
+                // No active connection — send directly via registry lookup
+                let endpoint: string | null = null;
+                if (inst.registryPath && existsSync(inst.registryPath)) {
+                  try {
+                    const reg = JSON.parse(readFileSync(inst.registryPath, 'utf8'));
+                    const peer = reg.find((r: any) => r.agentId === params.recipientId);
+                    endpoint = peer?.webhookEndpoint ?? null;
+                  } catch { /* ignore */ }
+                }
+                if (!endpoint && inst.maestro.sendDirect) {
+                  msg = await inst.maestro.sendDirect(params.recipientId, params.content);
+                } else if (endpoint) {
+                  // Raw HTTP POST directly to peer endpoint
+                  const msgId = Math.random().toString(36).slice(2);
+                  const body = JSON.stringify({
+                    id: msgId, type: 'direct', content: params.content,
+                    sender: { agentId: inst.agentId },
+                    recipient: params.recipientId,
+                    timestamp: Date.now(), version: '3.2',
+                  });
+                  const { request } = await import('http');
+                  await new Promise<void>((resolve, reject) => {
+                    const url = new URL(endpoint!);
+                    const req = request({ hostname: url.hostname, port: url.port, path: url.pathname, method: 'POST', headers: { 'Content-Type': 'application/json' } }, (res) => resolve());
+                    req.on('error', reject);
+                    req.end(body);
+                  });
+                  msg = { id: msgId, type: 'direct', recipient: params.recipientId };
+                } else {
+                  return error(`No endpoint found for ${params.recipientId} and sendDirect not available`);
+                }
+              }
+            }
           }
-          return ok({ messageId: msg.id, type: msg.type, recipient: msg.recipient, from: inst.agentId });
+          return ok({ messageId: msg?.id, type: msg?.type, recipient: msg?.recipient, from: inst.agentId });
         },
-      },
-      { optional: true }
+      }
     );
 
     // --------------------------------------------------------
@@ -369,6 +472,7 @@ export default definePluginEntry({
     api.registerTool(
       {
         name: "maestro_blackboard_set",
+        label: "Blackboard Set",
         description: "Write a key-value entry to the shared Blackboard of a Venue.",
         parameters: {
           type: "object" as const,
@@ -384,13 +488,13 @@ export default definePluginEntry({
         async execute(_id, params: any) {
           const inst = resolveInstance(params.agentId);
           if (!inst?.ready) return error(notReadyMsg(params.agentId));
-          const handle = inst.maestro.getVenue(params.venueId);
+          const handle = inst.maestro.getConnection ? inst.maestro.getConnection(params.venueId) : null;
           if (!handle) return error(`Not a member of Venue ${params.venueId}`);
-          await handle.blackboard.set(params.key, params.value, inst.agentId);
+          // v0.2.0: bbSet instead of blackboard.set
+          await handle.bbSet(params.key, params.value);
           return ok({ key: params.key, written: true, writtenBy: inst.agentId });
         },
-      },
-      { optional: true }
+      }
     );
 
     // --------------------------------------------------------
@@ -399,6 +503,7 @@ export default definePluginEntry({
     api.registerTool(
       {
         name: "maestro_blackboard_get",
+        label: "Blackboard Get",
         description: "Read a key or list all keys from the shared Blackboard of a Venue.",
         parameters: {
           type: "object" as const,
@@ -414,19 +519,24 @@ export default definePluginEntry({
         async execute(_id, params: any) {
           const inst = resolveInstance(params.agentId);
           if (!inst?.ready) return error(notReadyMsg(params.agentId));
-          const handle = inst.maestro.getVenue(params.venueId);
+          const handle = inst.maestro.getConnection ? inst.maestro.getConnection(params.venueId) : null;
           if (!handle) return error(`Not a member of Venue ${params.venueId}`);
 
           if (params.key) {
-            const entry = await handle.blackboard.getEntry(params.key);
-            if (!entry) return ok({ key: params.key, value: null, found: false });
-            return ok({ key: entry.key, value: entry.value, writtenBy: entry.writtenBy, version: entry.version, found: true });
+            // v0.2.0: bbGet returns value directly
+            const value = await handle.bbGet(params.key);
+            if (value === undefined || value === null) return ok({ key: params.key, value: null, found: false });
+            return ok({ key: params.key, value, found: true });
           }
-          const keys = await handle.blackboard.list(params.prefix);
-          return ok({ keys, count: keys.length });
+          // v0.2.0: no direct list on handle; use blackboard if available
+          const bb = inst.maestro.getBlackboard ? inst.maestro.getBlackboard(params.venueId) : null;
+          if (bb) {
+            const keys = await bb.list(params.prefix);
+            return ok({ keys, count: keys.length });
+          }
+          return ok({ keys: [], count: 0, note: 'List not available in this mode' });
         },
-      },
-      { optional: true }
+      }
     );
 
     // --------------------------------------------------------
@@ -435,6 +545,7 @@ export default definePluginEntry({
     api.registerTool(
       {
         name: "maestro_venue_list",
+        label: "List Maestro Venues",
         description: "List all Venues an agent is currently a member of.",
         parameters: {
           type: "object" as const,
@@ -446,20 +557,21 @@ export default definePluginEntry({
         async execute(_id, params: any) {
           const inst = resolveInstance(params.agentId);
           if (!inst?.ready) return error(notReadyMsg(params.agentId));
-          const venues = inst.maestro.listVenues().map((h: any) => {
-            const info = h.getVenueInfo();
+          // v0.2.0: listConnections
+          const listFn = inst.maestro.listConnections ?? inst.maestro.listVenues;
+          const venues = (listFn ? listFn.call(inst.maestro) : []).map((h: any) => {
+            const info = h.getConnectionInfo ? h.getConnectionInfo() : (h.getVenueInfo ? h.getVenueInfo() : {});
             return {
               venueId: info.id,
               name: info.name,
-              hostId: info.hostId,
+              hostId: info.hostAgentId ?? info.hostId,
               status: info.status,
-              membersCount: h.getMembers().length,
+              membersCount: h.getMembers ? h.getMembers().length : 0,
             };
           });
           return ok({ agentId: inst.agentId, venues, count: venues.length });
         },
-      },
-      { optional: true }
+      }
     );
 
     api.logger.info(
@@ -479,9 +591,10 @@ function notReadyMsg(agentId?: string): string {
 }
 
 function ok(data: unknown) {
-  return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+  return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }], details: {} };
 }
 
 function error(message: string) {
-  return { content: [{ type: "text" as const, text: JSON.stringify({ error: message }) }], isError: true };
+  return { content: [{ type: "text" as const, text: JSON.stringify({ error: message }) }], details: {}, isError: true };
 }
+
