@@ -65,6 +65,10 @@ DEFAULT_CONFIG = {
     "conversation": "maestro",
     "registryPath": ".maestro/registry.json",
     "version": "3.2",
+    # knownPeers: static peer endpoints, seeded into registry on startup.
+    # Key format: { "agentId": "endpoint" }
+    # Use this for cross-host peers that can't be discovered via mDNS.
+    "knownPeers": {},
 }
 
 def load_config(path: str = "maestro_transport.json") -> Dict[str, Any]:
@@ -84,35 +88,41 @@ class LocalRegistry:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
-    def _load(self) -> Dict[str, Any]:
+    def _load(self) -> list:
         if self.path.exists():
             try:
                 return json.loads(self.path.read_text())
             except Exception:
                 pass
-        return {}
+        return []
 
-    def _save(self, data: Dict[str, Any]):
+    def _save(self, data: list):
         self.path.write_text(json.dumps(data, indent=2))
 
     def register(self, agent_id: str, webhook_endpoint: str, capabilities: list = None):
         data = self._load()
-        data[agent_id] = {
+        # Remove existing entry for this agent if present
+        data = [e for e in data if e.get("agentId") != agent_id]
+        entry = {
             "agentId": agent_id,
             "webhookEndpoint": webhook_endpoint,
             "capabilities": capabilities or [],
             "registeredAt": int(time.time() * 1000),
             "lastSeen": int(time.time() * 1000),
         }
+        data.append(entry)
         self._save(data)
         log.info(f"Registered {agent_id} at {webhook_endpoint}")
 
     def lookup(self, agent_id: str) -> Optional[Dict[str, Any]]:
-        return self._load().get(agent_id)
+        for entry in self._load():
+            if entry.get("agentId") == agent_id:
+                return entry
+        return None
 
     def unregister(self, agent_id: str):
         data = self._load()
-        data.pop(agent_id, None)
+        data = [e for e in data if e.get("agentId") != agent_id]
         self._save(data)
 
 
@@ -142,54 +152,30 @@ class HermesClient:
         lines.append(message.get("content", ""))
         return "\n".join(lines)
 
-    async def send_and_stream(self, message: Dict[str, Any]) -> Optional[str]:
-        """Send a message to Hermes and stream the SSE response. Returns the output text."""
+    async def send_and_complete(self, message: Dict[str, Any]) -> Optional[str]:
+        """Send a message to Hermes via chat completions (non-streaming). Returns the output text."""
         prompt = self._format_prompt(message)
 
         async with ClientSession() as session:
-            # Create run
-            timeout = ClientTimeout(total=15)
+            timeout = ClientTimeout(total=120)
             async with session.post(
-                f"{self.api_url}/v1/runs",
-                json={"input": prompt, "conversation": self.conversation},
+                f"{self.api_url}/v1/chat/completions",
+                json={
+                    "model": "hermes-agent",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                },
                 headers=self._headers,
                 timeout=timeout,
             ) as resp:
-                if resp.status != 200 and resp.status != 202:
+                if resp.status != 200:
                     text = await resp.text()
-                    log.error(f"Run creation failed {resp.status}: {text}")
+                    log.error(f"Chat completions failed {resp.status}: {text}")
                     return None
-                run_data = await resp.json()
-
-            run_id = run_data.get("run_id")
-            if not run_id:
-                log.error("No run_id returned")
-                return None
-
-            log.info(f"Run created: {run_id}")
-
-            # Stream SSE events
-            stream_timeout = ClientTimeout(total=120)
-            async with session.get(
-                f"{self.api_url}/v1/runs/{run_id}/events",
-                headers={**self._headers, "Accept": "text/event-stream"},
-                timeout=stream_timeout,
-            ) as resp:
-                output = None
-                async for line in resp.content:
-                    line = line.decode("utf-8").strip()
-                    if not line.startswith("data:"):
-                        continue
-                    try:
-                        event = json.loads(line[5:].strip())
-                        if event.get("event") == "message.delta":
-                            print(event.get("delta", ""), end="", flush=True)
-                        elif event.get("event") == "run.completed":
-                            output = event.get("output", "")
-                            print()  # newline after streaming
-                            log.info(f"Run completed: {run_id}")
-                    except Exception:
-                        pass
+                data = await resp.json()
+                output = data.get("choices", [{}])[0].get("message", {}).get("content")
+                if output:
+                    log.info(f"Response received: {output[:80]}...")
                 return output
 
     async def health_check(self) -> bool:
@@ -223,8 +209,12 @@ class MaestroTransport:
         self.app = web.Application()
         self._setup_routes()
 
+    WEBHOOK_PATH = "/maestro/webhook"
+
     def _setup_routes(self):
         self.app.router.add_get("/health", self.handle_health)
+        # Accept both paths for backward compatibility
+        self.app.router.add_post("/maestro/webhook", self.handle_message)
         self.app.router.add_post("/message", self.handle_message)
         self.app.router.add_get("/connections/{connection_id}", self.handle_connection_get)
 
@@ -254,7 +244,7 @@ class MaestroTransport:
     async def _process_message(self, message: Dict[str, Any]):
         """Process an inbound message: send to Hermes, route reply back."""
         try:
-            output = await self.hermes.send_and_stream(message)
+            output = await self.hermes.send_and_complete(message)
             if not output:
                 log.warning("No output from Hermes — not routing reply")
                 return
@@ -311,9 +301,16 @@ class MaestroTransport:
             sys.exit(1)
         log.info(f"Hermes API reachable at {self.hermes.api_url}")
 
-        # Register in local registry
-        endpoint = f"http://0.0.0.0:{self.port}/message"
+        # Register in local registry — use /maestro/webhook to match Node plugin standard
+        # Use 0.0.0.0 for VM-side registration; Windows host accesses via port forward
+        endpoint = f"http://0.0.0.0:{self.port}/maestro/webhook"
         self.registry.register(self.agent_id, endpoint)
+
+        # Seed known peers into registry (static cross-host endpoints)
+        known_peers = self.config.get("knownPeers", {})
+        for peer_id, peer_endpoint in known_peers.items():
+            self.registry.register(peer_id, peer_endpoint)
+            log.info(f"Seeded known peer: {peer_id} at {peer_endpoint}")
 
         self.started_at = int(time.time() * 1000)
         runner = web.AppRunner(self.app)
