@@ -9,7 +9,17 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = 3901;
 const MAESTRO_API = 'http://127.0.0.1:3900'; // plugin API for read endpoints
 
-const server = createServer(async (req, res) => {
+const server = createServer((req, res) => {
+  handleRequest(req, res).catch(e => {
+    console.error('[Concerto] Unhandled error:', e.message);
+    if (!res.headersSent) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: e.message }));
+    }
+  });
+});
+
+async function handleRequest(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
@@ -94,7 +104,7 @@ const server = createServer(async (req, res) => {
 
   res.writeHead(404);
   res.end('Not found');
-});
+}
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`Concerto UI + proxy: http://127.0.0.1:${PORT}`);
