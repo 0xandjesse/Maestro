@@ -20,6 +20,13 @@ export interface OpenClawAdapterConfig {
   hookPath?: string;
   /** Map agentId → sessionKey, e.g. { lex: 'agent:lex:main' } */
   agentSessions?: Record<string, string>;
+  /**
+   * Model to use for isolated (handoff) turns.
+   * Should be a cheap non-Anthropic model — Maestro handoffs are dumb-pipe,
+   * no heavy reasoning needed. e.g. 'ollama/kimi-k2.5:cloud'
+   * If unset, the agent's default model is used (may incur Anthropic costs).
+   */
+  handoffModel?: string;
 }
 
 export class OpenClawAdapter {
@@ -40,13 +47,18 @@ export class OpenClawAdapter {
     const formattedContent = this.formatMessage(message);
 
     // OpenClaw POST /hooks/agent format:
-    // { message, agentId, name, wakeMode }
-    const payload = {
+    // { message, agentId, name, wakeMode, model }
+    // Use handoffModel for isolated turns to avoid Anthropic token burn.
+    const isHandoff = message.type === 'handoff';
+    const payload: Record<string, unknown> = {
       message: formattedContent,
       agentId,
       name: `Maestro from ${message.sender.agentId}`,
       wakeMode: 'now',
     };
+    if (this.config.handoffModel && isHandoff) {
+      payload.model = this.config.handoffModel;
+    }
 
     try {
       const controller = new AbortController();

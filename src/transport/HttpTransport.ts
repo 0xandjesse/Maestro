@@ -89,10 +89,17 @@ export class HttpTransport {
             timestamp: Date.now(),
             version: '3.2',
           };
-          console.log(`[HttpTransport] Hermes reply from ${reply.fromAgentId} → ${reply.toAgentId}: ${reply.output.slice(0, 80)}...`);
-          await this.send(replyMessage).catch((err: unknown) => {
-            console.error('[HttpTransport] Failed to deliver Hermes reply:', err);
-          });
+          console.log(`[HttpTransport] Hermes reply: ${reply.fromAgentId} → ${reply.toAgentId}: ${reply.output.slice(0, 80)}...`);
+          // Use OpenClaw adapter to wake recipient directly — avoids self-POST loop
+          if (this.openclawAdapter) {
+            await this.openclawAdapter.wakeAgent(reply.toAgentId, replyMessage).catch((err: unknown) => {
+              console.error('[HttpTransport] Failed to wake recipient for Hermes reply via OC adapter:', err);
+            });
+          } else {
+            await this.send(replyMessage).catch((err: unknown) => {
+              console.error('[HttpTransport] Failed to deliver Hermes reply:', err);
+            });
+          }
         },
       });
     }
@@ -164,6 +171,18 @@ export class HttpTransport {
       const failed = results.filter(r => !r.ok);
       if (failed.length === 0) return { ok: true };
       return { ok: false, error: `${failed.length}/${peers.length} deliveries failed` };
+    }
+
+    // If recipient is this agent itself, dispatch locally via router (avoid self-POST loop)
+    if (recipientId === this.agentId) {
+      await this.router.dispatch(message);
+      return { ok: true };
+    }
+
+    // If recipient is a known Hermes agent, deliver via HermesAdapter directly
+    if (this.hermesAdapter && this.config.hermesAgentSessions && recipientId in (this.config.hermesAgentSessions ?? {})) {
+      const result = await this.hermesAdapter.wakeAgent(recipientId, message);
+      return { ok: result.ok, error: result.error };
     }
 
     const registration = this.registry.lookup(recipientId);

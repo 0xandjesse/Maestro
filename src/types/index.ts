@@ -129,6 +129,7 @@ export type MessageType =
   | 'presence'
   | 'connection:invitation'
   | 'connection:announcement'
+    | 'handoff'
   | 'custom';
 
 // ----------------------------------------------------------
