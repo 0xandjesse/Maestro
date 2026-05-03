@@ -378,6 +378,7 @@ let agents = [];
 let activeAgent = null;
 let sseSource = null;
 let msgCount = 0;
+let sseFailCount = 0;
 
 // ── Agent colors ──
 const AGENT_COLORS = {
@@ -482,6 +483,7 @@ function connectStream() {
   sseSource = new EventSource(`${API}/api/messages/stream`);
 
   sseSource.onopen = () => {
+    sseFailCount = 0;
     document.getElementById('conn-dot').classList.add('connected');
     document.getElementById('conn-label').textContent = 'live';
     document.getElementById('conn-label').style.color = 'var(--green)';
@@ -501,10 +503,13 @@ function connectStream() {
   };
 
   sseSource.onerror = () => {
-    document.getElementById('conn-dot').classList.remove('connected');
-    document.getElementById('conn-label').textContent = 'reconnecting...';
-    document.getElementById('conn-label').style.color = 'var(--yellow)';
-    setTimeout(connectStream, 3000);
+    sseFailCount++;
+    if (sseFailCount >= 3) {
+      document.getElementById('conn-dot').classList.remove('connected');
+      document.getElementById('conn-label').textContent = 'polling';
+      document.getElementById('conn-label').style.color = 'var(--yellow)';
+    }
+    setTimeout(connectStream, 5000);
   };
 }
 
@@ -691,7 +696,7 @@ document.getElementById('compose-msg').addEventListener('keydown', e => {
 
 // ── Poll for agent updates every 10s ──
 setInterval(loadAgents, 10000);
-// ── Poll for new messages every 5s (backup to SSE) ──
+// ── Poll history every 3s — primary update mechanism (SSE is bonus) ──
 let lastHistoryLen = 0;
 setInterval(async () => {
   try {
@@ -703,7 +708,7 @@ setInterval(async () => {
       lastHistoryLen = data.messages.length;
     }
   } catch(e) {}
-}, 5000);
+}, 3000);
 
 // ── Init ──
 (async () => {

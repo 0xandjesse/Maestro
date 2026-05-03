@@ -246,7 +246,7 @@ export default definePluginEntry({
                 const from = msg.sender?.agentId ?? msg.from ?? 'unknown';
                 const content = msg.content ?? msg.text ?? JSON.stringify(msg);
                 const venueCtx = msg.venueId ? ` (Venue: ${msg.venueId})` : '';
-                const text = `[Maestro message from ${from}${venueCtx}]: ${content}`;
+                const text = `[Maestro message from ${from}${venueCtx}]: ${content}\n\n(Reply via maestro_send to ${from} so your response appears in the Concerto feed.)`;
 
                 const gatewayUrl = 'http://127.0.0.1:18789';
                 const hookToken = '06fe84970c2ba322f6e59e007145f015f862be85e72823265fad2b3b8ced1069';
@@ -755,6 +755,37 @@ export default definePluginEntry({
           if (url === '/api/messages/history' && req.method === 'GET') {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ ok: true, messages: _messageHistory.slice(-200) }));
+            return;
+          }
+
+          // POST /api/send — proxy a message to an agent endpoint (avoids browser CORS)
+          if (url === '/api/send' && req.method === 'POST') {
+            let body = '';
+            req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+            req.on('end', async () => {
+              try {
+                const payload = JSON.parse(body);
+                const { endpoint, message } = payload as { endpoint: string; message: unknown };
+                if (!endpoint || !message) {
+                  res.writeHead(400, { 'Content-Type': 'application/json' });
+                  res.end(JSON.stringify({ ok: false, error: 'Missing endpoint or message' }));
+                  return;
+                }
+                // Forward to agent transport endpoint server-side (native fetch, Node 18+)
+                const r = await fetch(endpoint, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(message),
+                  signal: AbortSignal.timeout(5000),
+                });
+                const result = await r.json().catch(() => ({}));
+                res.writeHead(r.status, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result));
+              } catch (e: any) {
+                res.writeHead(502, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ ok: false, error: e.message }));
+              }
+            });
             return;
           }
 
