@@ -56,6 +56,14 @@ interface AgentMaestroConfig {
   registryPath?: string;
 }
 
+interface HermesAgentConfig {
+  agentId: string;
+  apiUrl: string;
+  apiKey: string;
+  transport?: { port?: number };
+  agentSessions?: Record<string, string>;
+}
+
 interface MaestroInstance {
   maestro: any;
   agentId: string;
@@ -63,6 +71,31 @@ interface MaestroInstance {
   webhookPort: number;
   registryPath?: string;
   webhookEndpoint: string;
+  type?: 'openclaw' | 'hermes';
+}
+
+// ============================================================
+// Global message event bus — Concerto listens on this
+// ============================================================
+type MessageEventListener = (event: MessageEvent) => void;
+interface MessageEvent {
+  ts: number;
+  from: string;
+  to: string;
+  type: string;
+  content: string;
+  stageId?: string;
+}
+const _messageListeners: Set<MessageEventListener> = new Set();
+const _messageHistory: MessageEvent[] = [];
+const MAX_HISTORY = 500;
+
+function emitMessage(event: MessageEvent) {
+  _messageHistory.push(event);
+  if (_messageHistory.length > MAX_HISTORY) _messageHistory.shift();
+  for (const fn of _messageListeners) {
+    try { fn(event); } catch { /* ignore */ }
+  }
 }
 
 // ============================================================
@@ -101,6 +134,8 @@ export default definePluginEntry({
     const config = (api.pluginConfig ?? {}) as {
       // Multi-agent format
       agents?: AgentMaestroConfig[];
+      // Hermes VM agents
+      hermesAgents?: HermesAgentConfig[];
       // Legacy single-agent format
       agentId?: string;
       webhookPort?: number;
@@ -108,6 +143,8 @@ export default definePluginEntry({
       discovery?: "mdns" | "file" | "none";
       registryPath?: string;
     };
+
+    const hermesAgentConfigs: HermesAgentConfig[] = config.hermesAgents ?? [];
 
     // Normalize to array format regardless of input
     const agentConfigs: AgentMaestroConfig[] = config.agents ?? [
@@ -130,6 +167,45 @@ export default definePluginEntry({
           "@maestro-protocol/core"
         ) as any;
 
+        // ---- Boot Hermes VM agents ----
+        for (const hcfg of hermesAgentConfigs) {
+          const port = hcfg.transport?.port ?? 3844;
+          const whEndpoint = `http://localhost:${port}/maestro/webhook`;
+          _instances.set(hcfg.agentId, { maestro: null, agentId: hcfg.agentId, ready: false, webhookPort: port, webhookEndpoint: whEndpoint, type: 'hermes' });
+          try {
+            const defaultRegistryPath = 'C:\\Users\\there\\Projects\\Maestro\\maestro-protocol\\.maestro\\registry.json';
+            const defaultDbPath = 'C:\\Users\\there\\Projects\\Maestro\\maestro-protocol\\.maestro\\connections.db';
+            const maestro = new Maestro({
+              agentId: hcfg.agentId,
+              transport: { port, registryPath: defaultRegistryPath, dbPath: defaultDbPath },
+              hermes: {
+                apiUrl: hcfg.apiUrl,
+                apiKey: hcfg.apiKey,
+                agentSessions: hcfg.agentSessions,
+                awaitResponse: true,
+                responseTimeoutMs: 90000,
+              },
+            });
+            await maestro.start();
+            _instances.set(hcfg.agentId, { maestro, agentId: hcfg.agentId, ready: true, webhookPort: port, webhookEndpoint: whEndpoint, type: 'hermes' });
+            api.logger.info(`Maestro Hermes adapter started — agentId=${hcfg.agentId} port=${port}`);
+            // Emit inbound messages to Concerto feed
+            maestro.onMessage('*', (msg: any) => {
+              emitMessage({
+                ts: Date.now(),
+                from: msg.sender?.agentId ?? 'unknown',
+                to: hcfg.agentId,
+                type: msg.type,
+                content: msg.content ?? JSON.stringify(msg),
+                stageId: msg.stageId,
+              });
+            });
+          } catch (err) {
+            api.logger.error(`Maestro Hermes adapter failed for agent ${hcfg.agentId}: ${err}`);
+          }
+        }
+
+        // ---- Boot OpenClaw agents ----
         for (const cfg of agentConfigs) {
           const { agentId, webhookPort = 3842, blackboardPath, discovery = "mdns", registryPath } = cfg;
 
@@ -155,8 +231,16 @@ export default definePluginEntry({
             await maestro.start();
             _instances.set(agentId, { maestro, agentId, ready: true, webhookPort, registryPath, webhookEndpoint: whEndpoint });
             api.logger.info(`Maestro started — agentId=${agentId} port=${webhookPort}`);
+            // Mark as openclaw type
+            _instances.set(agentId, { maestro, agentId, ready: true, webhookPort, registryPath, webhookEndpoint: whEndpoint, type: 'openclaw' });
 
-            // Wire incoming messages into the agent's active session and wake it
+            // Wire incoming messages into the agent's active session and wake it.
+            //
+            // Routing by message type:
+            //   direct  → persistent named session (session:agentId-from) — conversational,
+            //             observable in Concerto, context preserved across exchanges
+            //   other   → isolated turn (fire-and-forget) — handoff/task passing,
+            //             dumb pipe, human only cares about the final deliverable
             maestro.onMessage('*', (msg: any) => {
               try {
                 const from = msg.sender?.agentId ?? msg.from ?? 'unknown';
@@ -164,12 +248,63 @@ export default definePluginEntry({
                 const venueCtx = msg.venueId ? ` (Venue: ${msg.venueId})` : '';
                 const text = `[Maestro message from ${from}${venueCtx}]: ${content}`;
 
-                // Enqueue into the agent's main session
-                const sessionKey = `agent:${agentId}:main`;
-                api.runtime.system.enqueueSystemEvent(text, { sessionKey });
-                // Actively wake the session so it processes the message immediately
-                getHeartbeatFn().then(fn => fn({ sessionKey, reason: 'maestro:inbound' }));
-                api.logger.info(`Maestro: injected + woke session ${sessionKey} (from ${from})`);
+                const gatewayUrl = 'http://127.0.0.1:18789';
+                const hookToken = '06fe84970c2ba322f6e59e007145f015f862be85e72823265fad2b3b8ced1069';
+                const isDirect = msg.type === 'direct';
+
+                if (isDirect) {
+                  // Conversational: route to persistent named session so context is preserved
+                  // and the exchange is observable. Session key: session:agentId:from
+                  const sessionKey = `session:${agentId}:${from}`;
+                  fetch(`${gatewayUrl}/hooks/agent`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${hookToken}` },
+                    body: JSON.stringify({
+                      message: text,
+                      agentId,
+                      name: `Maestro from ${from}`,
+                      wakeMode: 'now',
+                      // Direct messages: use agent's native model (no override)
+                      // so conversational turns use the right model (Sonnet for songbird, etc.)
+                      sessionKey,
+                    }),
+                    signal: AbortSignal.timeout(5000),
+                  }).then(r => {
+                    if (r.ok) api.logger.info(`Maestro: routed direct message to persistent session ${sessionKey} (from ${from})`);
+                    else api.logger.warn(`Maestro: hooks API rejected for direct message: ${r.status}`);
+                  }).catch(e => {
+                    api.logger.warn(`Maestro: hooks API failed for direct message (${e.message}), falling back to enqueue`);
+                    api.runtime.system.enqueueSystemEvent(text, { sessionKey });
+                    getHeartbeatFn().then(fn => fn({ sessionKey, reason: 'maestro:inbound' }));
+                  });
+                } else {
+                  // Handoff/task: isolated turn, fire-and-forget, cheap model
+                  fetch(`${gatewayUrl}/hooks/agent`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${hookToken}` },
+                    body: JSON.stringify({
+                      message: text,
+                      agentId,
+                      name: `Maestro from ${from}`,
+                      wakeMode: 'now',
+                      // Handoff/isolated turns: cheap model, no Anthropic tokens
+                      model: 'ollama/kimi-k2.5:cloud',
+                    }),
+                    signal: AbortSignal.timeout(5000),
+                  }).then(r => {
+                    if (r.ok) api.logger.info(`Maestro: fired isolated turn for ${msg.type} message (from ${from})`);
+                    else api.logger.warn(`Maestro: hooks API rejected for ${msg.type} message: ${r.status}`);
+                  }).catch(e => {
+                    api.logger.warn(`Maestro: hooks API failed for ${msg.type} message (${e.message}), falling back to enqueue`);
+                    const sessionKey = `agent:${agentId}:main`;
+                    api.runtime.system.enqueueSystemEvent(text, { sessionKey });
+                    getHeartbeatFn().then(fn => fn({ sessionKey, reason: 'maestro:inbound' }));
+                  });
+                }
+
+                api.logger.info(`Maestro: dispatched ${msg.type} message (from ${from})`);
+                // Emit to Concerto feed
+                emitMessage({ ts: Date.now(), from, to: agentId, type: msg.type, content, stageId: msg.venueId ?? msg.stageId });
               } catch (err) {
                 api.logger.error(`Maestro: failed to inject inbound message: ${err}`);
               }
@@ -574,8 +709,109 @@ export default definePluginEntry({
       }
     );
 
+    // --------------------------------------------------------
+    // Service: Concerto API server (port 3900)
+    // Serves the human-facing observer API and SSE message feed
+    // --------------------------------------------------------
+    api.registerService({
+      id: 'maestro-concerto-api',
+      async start() {
+        const { createServer, IncomingMessage, ServerResponse } = await import('http');
+        const { readFileSync, existsSync } = await import('fs');
+        const CONCERTO_PORT = 3900;
+        const REG_PATH = 'C:\\Users\\there\\Projects\\Maestro\\maestro-protocol\\.maestro\\registry.json';
+
+        const server = createServer((req: any, res: any) => {
+          const url: string = req.url ?? '/';
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+          if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+          if (url === '/api/status' && req.method === 'GET') {
+            const instances = [..._instances.entries()].map(([agentId, inst]) => ({
+              agentId,
+              ready: inst.ready,
+              type: inst.type ?? 'openclaw',
+              port: inst.webhookPort,
+            }));
+            const body = JSON.stringify({ ok: true, instances, ts: Date.now() });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(body);
+            return;
+          }
+
+          if (url === '/api/registry' && req.method === 'GET') {
+            try {
+              const peers = existsSync(REG_PATH) ? JSON.parse(readFileSync(REG_PATH, 'utf8')) : [];
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ ok: true, peers }));
+            } catch (e: any) {
+              res.writeHead(500, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ ok: false, error: e.message }));
+            }
+            return;
+          }
+
+          if (url === '/api/messages/history' && req.method === 'GET') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true, messages: _messageHistory.slice(-200) }));
+            return;
+          }
+
+          if (url === '/api/messages/stream' && req.method === 'GET') {
+            res.writeHead(200, {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              'Connection': 'keep-alive',
+            });
+            // Send recent history on connect
+            res.write(`data: ${JSON.stringify({ type: 'history', messages: _messageHistory.slice(-50) })}\n\n`);
+            const listener: MessageEventListener = (event) => {
+              try { res.write(`data: ${JSON.stringify({ type: 'message', event })}\n\n`); } catch { /* closed */ }
+            };
+            _messageListeners.add(listener);
+            req.on('close', () => _messageListeners.delete(listener));
+            return;
+          }
+
+          // Serve Concerto UI for root and /index.html
+          // Serve Concerto UI for any unmatched GET (catch-all SPA)
+          if (req.method === 'GET') {
+            const uiPath = 'C:\\Users\\there\\Projects\\Maestro\\concerto\\index.html';
+            try {
+              const html = readFileSync(uiPath, 'utf8');
+              res.writeHead(200, { 'Content-Type': 'text/html' });
+              res.end(html);
+            } catch (e: any) {
+              res.writeHead(404, { 'Content-Type': 'text/plain' });
+              res.end('Concerto UI not found: ' + e.message);
+            }
+            return;
+          }
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Not found' }));
+        });
+
+        await new Promise<void>((resolve) => {
+          server.listen(CONCERTO_PORT, '127.0.0.1', () => {
+            api.logger.info(`Maestro Concerto API on http://127.0.0.1:${CONCERTO_PORT}`);
+            resolve();
+          });
+          server.on('error', (err: Error) => {
+            api.logger.warn(`Maestro Concerto API failed: ${err.message}`);
+            resolve();
+          });
+        });
+      },
+      async stop() {
+        _messageListeners.clear();
+      },
+    });
+
     api.logger.info(
-      `Maestro plugin registered — ${agentConfigs.length} agent(s): ${agentConfigs.map(c => c.agentId).join(", ")}`
+      `Maestro plugin registered — ${agentConfigs.length} agent(s): ${agentConfigs.map(c => c.agentId).join(", ")}${
+        hermesAgentConfigs.length > 0 ? ` + ${hermesAgentConfigs.length} Hermes agent(s): ${hermesAgentConfigs.map(c => c.agentId).join(", ")}` : ''
+      }`
     );
   },
 });

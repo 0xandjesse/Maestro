@@ -42,6 +42,31 @@
       "registryPath": {
         "type": "string",
         "description": "Path to file registry (required when discovery=file)"
+      },
+      "hermesAgents": {
+        "type": "array",
+        "description": "Hermes-Agent VM instances to give Maestro presence.",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["agentId", "apiUrl", "apiKey"],
+          "properties": {
+            "agentId": { "type": "string" },
+            "apiUrl": { "type": "string" },
+            "apiKey": { "type": "string" },
+            "transport": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "port": { "type": "number" }
+              }
+            },
+            "agentSessions": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            }
+          }
+        }
       }
     }
   }

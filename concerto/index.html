@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Maestro Concerto</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0d0d0f;
+      --surface: #16161a;
+      --surface2: #1e1e24;
+      --border: #2a2a35;
+      --text: #e8e8f0;
+      --text-dim: #7a7a90;
+      --accent: #7c6af7;
+      --accent-dim: #3d3670;
+      --green: #4ade80;
+      --yellow: #facc15;
+      --red: #f87171;
+      --orange: #fb923c;
+      --blue: #60a5fa;
+      --pink: #f472b6;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+      font-size: 13px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-shrink: 0;
+    }
+    header h1 {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      color: var(--accent);
+    }
+    header .subtitle {
+      color: var(--text-dim);
+      font-size: 11px;
+    }
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--red);
+      flex-shrink: 0;
+    }
+    .status-dot.connected { background: var(--green); }
+    .header-right {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+    #msg-count { color: var(--accent); font-weight: 600; }
+
+    /* ── Main layout ── */
+    .layout {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ── Sidebar ── */
+    .sidebar {
+      width: 220px;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+    .sidebar-section {
+      padding: 10px 12px 6px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-dim);
+    }
+    .agent-list { flex: 1; overflow-y: auto; }
+    .agent-item {
+      padding: 8px 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      border-left: 3px solid transparent;
+      transition: background 0.1s;
+    }
+    .agent-item:hover { background: var(--surface2); }
+    .agent-item.active {
+      background: var(--surface2);
+      border-left-color: var(--accent);
+    }
+    .agent-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--text-dim);
+      flex-shrink: 0;
+    }
+    .agent-dot.online { background: var(--green); }
+    .agent-dot.offline { background: var(--red); }
+    .agent-name { font-size: 12px; flex: 1; }
+    .agent-type {
+      font-size: 9px;
+      color: var(--text-dim);
+      background: var(--surface2);
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+    .agent-type.hermes { color: var(--orange); }
+    .agent-type.openclaw { color: var(--blue); }
+
+    /* ── Main panel ── */
+    .main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Tabs ── */
+    .tabs {
+      display: flex;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .tab {
+      padding: 9px 18px;
+      font-size: 12px;
+      cursor: pointer;
+      color: var(--text-dim);
+      border-bottom: 2px solid transparent;
+      transition: color 0.1s;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+
+    /* ── Feed panel ── */
+    .panel { display: none; flex: 1; overflow: hidden; flex-direction: column; }
+    .panel.active { display: flex; }
+
+    .feed {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .feed::-webkit-scrollbar { width: 6px; }
+    .feed::-webkit-scrollbar-track { background: transparent; }
+    .feed::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    .msg {
+      display: flex;
+      gap: 10px;
+      align-items: baseline;
+      padding: 5px 8px;
+      border-radius: 4px;
+      transition: background 0.1s;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .msg:hover { background: var(--surface2); }
+    .msg .ts {
+      color: var(--text-dim);
+      font-size: 10px;
+      flex-shrink: 0;
+      width: 72px;
+    }
+    .msg .route {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      min-width: 160px;
+    }
+    .msg .from { font-weight: 600; }
+    .msg .arrow { color: var(--text-dim); }
+    .msg .to { color: var(--text-dim); }
+    .msg .type-badge {
+      font-size: 9px;
+      padding: 1px 5px;
+      border-radius: 3px;
+      background: var(--surface2);
+      color: var(--text-dim);
+      flex-shrink: 0;
+    }
+    .msg .content { color: var(--text); flex: 1; word-break: break-word; }
+    .msg .stage { color: var(--text-dim); font-size: 10px; }
+
+    /* Agent color coding */
+    [data-agent="songbird"] { color: var(--accent); }
+    [data-agent="lexicon"] { color: var(--blue); }
+    [data-agent="hermes"] { color: var(--orange); }
+    [data-agent="hermes-lex"] { color: var(--pink); }
+
+    /* ── Status panel ── */
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 12px;
+      padding: 16px;
+    }
+    .status-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px;
+    }
+    .status-card h3 {
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .status-card .row {
+      display: flex;
+      justify-content: space-between;
+      padding: 3px 0;
+      font-size: 11px;
+      border-bottom: 1px solid var(--border);
+    }
+    .status-card .row:last-child { border-bottom: none; }
+    .status-card .row .label { color: var(--text-dim); }
+    .status-card .row .value { color: var(--text); font-weight: 500; }
+    .ok { color: var(--green) !important; }
+    .warn { color: var(--yellow) !important; }
+    .err { color: var(--red) !important; }
+
+    /* ── Compose bar ── */
+    .compose {
+      border-top: 1px solid var(--border);
+      padding: 10px 12px;
+      display: flex;
+      gap: 8px;
+      background: var(--surface);
+      flex-shrink: 0;
+    }
+    .compose select, .compose input {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 4px;
+      padding: 6px 10px;
+      font-family: inherit;
+      font-size: 12px;
+      outline: none;
+    }
+    .compose select:focus, .compose input:focus {
+      border-color: var(--accent);
+    }
+    .compose input { flex: 1; }
+    .compose select.from-sel { width: 110px; }
+    .compose select.to-sel { width: 110px; }
+    .compose button {
+      background: var(--accent);
+      border: none;
+      color: white;
+      border-radius: 4px;
+      padding: 6px 14px;
+      font-family: inherit;
+      font-size: 12px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .compose button:hover { background: #6b5ce7; }
+    .compose button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* ── Empty state ── */
+    .empty {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-dim);
+      font-size: 12px;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .empty .icon { font-size: 32px; opacity: 0.3; }
+
+    /* Scrollbar always at bottom */
+    .feed.pinned { justify-content: flex-end; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="status-dot" id="conn-dot"></div>
+  <h1>Maestro Concerto</h1>
+  <span class="subtitle">Local Stage</span>
+  <div class="header-right">
+    <span><span id="msg-count">0</span> messages</span>
+    <span id="conn-label" style="color:var(--red)">disconnected</span>
+  </div>
+</header>
+
+<div class="layout">
+  <div class="sidebar">
+    <div class="sidebar-section">Agents</div>
+    <div class="agent-list" id="agent-list">
+      <div class="empty" style="padding:20px;font-size:11px;">loading...</div>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="tabs">
+      <div class="tab active" data-tab="feed">Master Feed</div>
+      <div class="tab" data-tab="status">Status</div>
+    </div>
+
+    <!-- Feed panel -->
+    <div class="panel active" id="panel-feed">
+      <div class="feed" id="feed">
+        <div class="empty">
+          <div class="icon">📡</div>
+          <div>Waiting for messages...</div>
+        </div>
+      </div>
+      <div class="compose">
+        <select class="from-sel" id="compose-from"><option value="">from...</option></select>
+        <span style="align-self:center;color:var(--text-dim)">→</span>
+        <select class="to-sel" id="compose-to"><option value="">to...</option></select>
+        <input type="text" id="compose-msg" placeholder="Type a message..." />
+        <button id="compose-send">Send</button>
+      </div>
+    </div>
+
+    <!-- Status panel -->
+    <div class="panel" id="panel-status">
+      <div class="status-grid" id="status-grid">
+        <div class="empty" style="grid-column:1/-1">loading...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = 'http://127.0.0.1:3900';
+let messages = [];
+let agents = [];
+let activeAgent = null;
+let sseSource = null;
+let msgCount = 0;
+
+// ── Agent colors ──
+const AGENT_COLORS = {
+  songbird: 'var(--accent)',
+  lexicon:  'var(--blue)',
+  hermes:   'var(--orange)',
+  'hermes-lex': 'var(--pink)',
+};
+function agentColor(id) {
+  return AGENT_COLORS[id] || 'var(--text)';
+}
+
+// ── Tab switching ──
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+    if (tab.dataset.tab === 'status') refreshStatus();
+  });
+});
+
+// ── Format timestamp ──
+function fmtTime(ts) {
+  const d = new Date(ts);
+  return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+// ── Render a single message row ──
+function renderMsg(m) {
+  const row = document.createElement('div');
+  row.className = 'msg';
+
+  const content = m.content || '';
+  const stageHtml = m.stageId ? `<span class="stage">[${m.stageId.slice(0,8)}]</span>` : '';
+
+  row.innerHTML = `
+    <span class="ts">${fmtTime(m.ts)}</span>
+    <span class="route">
+      <span class="from" data-agent="${m.from}" style="color:${agentColor(m.from)}">${m.from}</span>
+      <span class="arrow">→</span>
+      <span class="to" data-agent="${m.to}" style="color:${agentColor(m.to)}">${m.to}</span>
+    </span>
+    <span class="type-badge">${m.type}</span>
+    <span class="content">${escHtml(content)} ${stageHtml}</span>
+  `;
+  return row;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Feed management ──
+const feedEl = document.getElementById('feed');
+let emptyShown = true;
+
+function addMessage(m) {
+  if (emptyShown) {
+    feedEl.innerHTML = '';
+    emptyShown = false;
+  }
+  const row = renderMsg(m);
+  feedEl.appendChild(row);
+  feedEl.scrollTop = feedEl.scrollHeight;
+  msgCount++;
+  document.getElementById('msg-count').textContent = msgCount;
+}
+
+// ── Load history ──
+async function loadHistory() {
+  try {
+    const r = await fetch(`${API}/api/messages/history`);
+    const data = await r.json();
+    if (data.messages && data.messages.length > 0) {
+      feedEl.innerHTML = '';
+      emptyShown = false;
+      data.messages.forEach(m => {
+        const row = renderMsg(m);
+        feedEl.appendChild(row);
+      });
+      msgCount = data.messages.length;
+      document.getElementById('msg-count').textContent = msgCount;
+      feedEl.scrollTop = feedEl.scrollHeight;
+    }
+  } catch(e) {
+    console.warn('History load failed:', e);
+  }
+}
+
+// ── SSE stream ──
+function connectStream() {
+  if (sseSource) { sseSource.close(); }
+  sseSource = new EventSource(`${API}/api/messages/stream`);
+
+  sseSource.onopen = () => {
+    document.getElementById('conn-dot').classList.add('connected');
+    document.getElementById('conn-label').textContent = 'live';
+    document.getElementById('conn-label').style.color = 'var(--green)';
+  };
+
+  sseSource.onmessage = (e) => {
+    try {
+      const payload = JSON.parse(e.data);
+      if (payload.type === 'history') {
+        // SSE gave us history on connect — skip if we already loaded via HTTP
+      } else if (payload.type === 'message') {
+        addMessage(payload.event);
+      }
+    } catch(err) {
+      console.warn('SSE parse error:', err);
+    }
+  };
+
+  sseSource.onerror = () => {
+    document.getElementById('conn-dot').classList.remove('connected');
+    document.getElementById('conn-label').textContent = 'reconnecting...';
+    document.getElementById('conn-label').style.color = 'var(--yellow)';
+    setTimeout(connectStream, 3000);
+  };
+}
+
+// ── Load agents ──
+async function loadAgents() {
+  try {
+    const [statusR, regR] = await Promise.all([
+      fetch(`${API}/api/status`),
+      fetch(`${API}/api/registry`),
+    ]);
+    const status = await statusR.json();
+    const registry = await regR.json();
+
+    // Merge: instances = what's running in the plugin; registry = who's known
+    const known = new Map();
+    (registry.peers || []).forEach(p => known.set(p.agentId, { ...p, online: false }));
+    (status.instances || []).forEach(i => {
+      const existing = known.get(i.agentId) || {};
+      known.set(i.agentId, { ...existing, ...i, online: i.ready });
+    });
+
+    agents = [...known.values()];
+    renderAgentList();
+    populateComposeSelects();
+  } catch(e) {
+    console.warn('Agent load failed:', e);
+  }
+}
+
+function renderAgentList() {
+  const list = document.getElementById('agent-list');
+  list.innerHTML = '';
+  agents.forEach(a => {
+    const item = document.createElement('div');
+    item.className = 'agent-item' + (activeAgent === a.agentId ? ' active' : '');
+    item.dataset.agent = a.agentId;
+    const type = a.type || (a.capabilities?.includes('hermes-agent') ? 'hermes' : 'openclaw');
+    item.innerHTML = `
+      <div class="agent-dot ${a.online ? 'online' : 'offline'}"></div>
+      <span class="agent-name" style="color:${agentColor(a.agentId)}">${a.agentId}</span>
+      <span class="agent-type ${type}">${type}</span>
+    `;
+    item.addEventListener('click', () => {
+      activeAgent = a.agentId;
+      document.querySelectorAll('.agent-item').forEach(el => el.classList.remove('active'));
+      item.classList.add('active');
+    });
+    list.appendChild(item);
+  });
+}
+
+function populateComposeSelects() {
+  const fromSel = document.getElementById('compose-from');
+  const toSel = document.getElementById('compose-to');
+  const prevFrom = fromSel.value;
+  const prevTo = toSel.value;
+  fromSel.innerHTML = '<option value="">from...</option>';
+  toSel.innerHTML = '<option value="">to...</option>';
+  agents.forEach(a => {
+    const optF = new Option(a.agentId, a.agentId);
+    const optT = new Option(a.agentId, a.agentId);
+    if (a.agentId === prevFrom) optF.selected = true;
+    if (a.agentId === prevTo) optT.selected = true;
+    fromSel.appendChild(optF);
+    toSel.appendChild(optT);
+  });
+  // Default from=songbird
+  if (!prevFrom) fromSel.value = 'songbird';
+}
+
+// ── Status panel ──
+async function refreshStatus() {
+  try {
+    const [statusR, regR] = await Promise.all([
+      fetch(`${API}/api/status`),
+      fetch(`${API}/api/registry`),
+    ]);
+    const status = await statusR.json();
+    const registry = await regR.json();
+    const grid = document.getElementById('status-grid');
+    grid.innerHTML = '';
+
+    // Overall card
+    const overallCard = document.createElement('div');
+    overallCard.className = 'status-card';
+    const onlineCount = (status.instances || []).filter(i => i.ready).length;
+    const peerCount = (registry.peers || []).length;
+    overallCard.innerHTML = `
+      <h3>🌐 Maestro Mesh</h3>
+      <div class="row"><span class="label">agents online</span><span class="value ok">${onlineCount}</span></div>
+      <div class="row"><span class="label">registry peers</span><span class="value">${peerCount}</span></div>
+      <div class="row"><span class="label">messages seen</span><span class="value">${msgCount}</span></div>
+      <div class="row"><span class="label">concerto api</span><span class="value ok">http://127.0.0.1:3900</span></div>
+    `;
+    grid.appendChild(overallCard);
+
+    // Per-agent cards
+    const allAgents = new Map();
+    (registry.peers || []).forEach(p => allAgents.set(p.agentId, { ...p }));
+    (status.instances || []).forEach(i => {
+      allAgents.set(i.agentId, { ...(allAgents.get(i.agentId) || {}), ...i });
+    });
+
+    allAgents.forEach((a, agentId) => {
+      const card = document.createElement('div');
+      card.className = 'status-card';
+      const isOnline = a.ready === true || a.online === true;
+      const type = a.type || (a.capabilities?.includes('hermes-agent') ? 'hermes' : a.online ? 'openclaw' : 'unknown');
+      const endpoint = a.webhookEndpoint || (a.port ? `http://127.0.0.1:${a.port}/message` : '—');
+      card.innerHTML = `
+        <h3><span style="color:${agentColor(agentId)}">${agentId}</span>
+          <span class="${isOnline ? 'ok' : 'err'}" style="font-size:10px;margin-left:auto">${isOnline ? '● online' : '○ offline'}</span>
+        </h3>
+        <div class="row"><span class="label">type</span><span class="value">${type}</span></div>
+        <div class="row"><span class="label">endpoint</span><span class="value" style="font-size:10px">${endpoint}</span></div>
+        ${a.port ? `<div class="row"><span class="label">port</span><span class="value">${a.port}</span></div>` : ''}
+        ${a.lastSeen ? `<div class="row"><span class="label">last seen</span><span class="value" style="font-size:10px">${new Date(a.lastSeen).toLocaleTimeString()}</span></div>` : ''}
+      `;
+      grid.appendChild(card);
+    });
+  } catch(e) {
+    document.getElementById('status-grid').innerHTML = `<div class="empty" style="grid-column:1/-1;color:var(--red)">Failed to load status: ${e.message}</div>`;
+  }
+}
+
+// ── Compose send ──
+document.getElementById('compose-send').addEventListener('click', async () => {
+  const from = document.getElementById('compose-from').value;
+  const to = document.getElementById('compose-to').value;
+  const content = document.getElementById('compose-msg').value.trim();
+  if (!from || !to || !content) return;
+
+  const btn = document.getElementById('compose-send');
+  btn.disabled = true;
+  try {
+    const fromAgent = agents.find(a => a.agentId === from);
+    const fromPort = fromAgent?.port || fromAgent?.webhookPort || 3842;
+    // POST directly to the sender's /message endpoint, addressed to recipient
+    const body = {
+      id: Math.random().toString(36).slice(2),
+      type: 'direct',
+      content,
+      sender: { agentId: from },
+      recipient: to,
+      timestamp: Date.now(),
+      version: '3.2',
+    };
+    // Route via sender's transport — post to recipient's endpoint
+    const toAgent = agents.find(a => a.agentId === to);
+    const toEndpoint = toAgent?.webhookEndpoint || `http://127.0.0.1:${(toAgent?.port || 3842)}/message`;
+    const r = await fetch(toEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (r.ok) {
+      document.getElementById('compose-msg').value = '';
+      // Add to local feed immediately
+      addMessage({ ts: Date.now(), from, to, type: 'direct', content });
+    } else {
+      alert(`Send failed: HTTP ${r.status}`);
+    }
+  } catch(e) {
+    alert(`Send failed: ${e.message}`);
+  }
+  btn.disabled = false;
+});
+
+document.getElementById('compose-msg').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('compose-send').click();
+});
+
+// ── Poll for agent updates every 10s ──
+setInterval(loadAgents, 10000);
+// ── Poll for new messages every 5s (backup to SSE) ──
+let lastHistoryLen = 0;
+setInterval(async () => {
+  try {
+    const r = await fetch(`${API}/api/messages/history`);
+    const data = await r.json();
+    if (data.messages && data.messages.length > lastHistoryLen) {
+      const newMsgs = data.messages.slice(lastHistoryLen);
+      newMsgs.forEach(m => addMessage(m));
+      lastHistoryLen = data.messages.length;
+    }
+  } catch(e) {}
+}, 5000);
+
+// ── Init ──
+(async () => {
+  await loadHistory();
+  lastHistoryLen = messages.length;
+  await loadAgents();
+  connectStream();
+  // Update status periodically
+  setInterval(() => {
+    const activeTab = document.querySelector('.tab.active');
+    if (activeTab?.dataset.tab === 'status') refreshStatus();
+  }, 5000);
+})();
+</script>
+</body>
+</html>
