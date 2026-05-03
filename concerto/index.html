@@ -372,7 +372,8 @@
 </div>
 
 <script>
-const API = 'http://127.0.0.1:3901'; // serves UI + proxies /api/* to 3900 and /api/send to agents
+const API  = 'http://127.0.0.1:3900'; // Maestro plugin API (status, registry, history, SSE)
+const SEND = 'http://127.0.0.1:3901'; // send proxy (avoids CORS on agent transport ports)
 let messages = [];
 let agents = [];
 let activeAgent = null;
@@ -673,7 +674,7 @@ document.getElementById('compose-send').addEventListener('click', async () => {
       version: '3.2',
     };
 
-    const r = await fetch(`${API}/api/send`, {
+    const r = await fetch(`${SEND}/api/send`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ endpoint: toEndpoint, message }),
