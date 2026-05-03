@@ -372,7 +372,7 @@
 </div>
 
 <script>
-const API = 'http://127.0.0.1:3900';
+const API = 'http://127.0.0.1:3901'; // serves UI + proxies /api/* to 3900 and /api/send to agents
 let messages = [];
 let agents = [];
 let activeAgent = null;
@@ -651,55 +651,33 @@ document.getElementById('compose-send').addEventListener('click', async () => {
   const btn = document.getElementById('compose-send');
   btn.disabled = true;
   try {
-    if (from === HUMAN_ID) {
-      // Human message: inject directly into the recipient agent's OpenClaw session
-      // Routes via the Maestro API which delivers it as a session message
-      const toAgent = agents.find(a => a.agentId === to);
-      const toEndpoint = toAgent?.webhookEndpoint || `http://127.0.0.1:${toAgent?.port || 3842}/message`;
-      const body = {
-        id: Math.random().toString(36).slice(2),
-        type: 'direct',
-        content: `[Jesse via Concerto]: ${content}`,
-        sender: { agentId: HUMAN_ID, displayName: 'Jesse', human: true },
-        recipient: to,
-        timestamp: Date.now(),
-        version: '3.2',
-      };
-      const r = await fetch(toEndpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (r.ok) {
-        document.getElementById('compose-msg').value = '';
-        addMessage({ ts: Date.now(), from: HUMAN_ID, to, type: 'human', content });
-      } else {
-        alert(`Send failed: HTTP ${r.status}`);
-      }
+    // All sends go through the API proxy at 3900 to avoid CORS
+    const toAgent = agents.find(a => a.agentId === to);
+    const toEndpoint = toAgent?.webhookEndpoint || `http://127.0.0.1:${toAgent?.port || 3842}/message`;
+
+    const isHuman = from === HUMAN_ID;
+    const message = {
+      id: Math.random().toString(36).slice(2),
+      type: 'direct',
+      content: isHuman ? `[Jesse via Concerto]: ${content}` : content,
+      sender: isHuman
+        ? { agentId: HUMAN_ID, displayName: 'Jesse', human: true }
+        : { agentId: from },
+      recipient: to,
+      timestamp: Date.now(),
+      version: '3.2',
+    };
+
+    const r = await fetch(`${API}/api/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint: toEndpoint, message }),
+    });
+    if (r.ok) {
+      document.getElementById('compose-msg').value = '';
+      addMessage({ ts: Date.now(), from: isHuman ? HUMAN_ID : from, to, type: isHuman ? 'human' : 'direct', content });
     } else {
-      // Agent-to-agent message: post to recipient's /message endpoint
-      const body = {
-        id: Math.random().toString(36).slice(2),
-        type: 'direct',
-        content,
-        sender: { agentId: from },
-        recipient: to,
-        timestamp: Date.now(),
-        version: '3.2',
-      };
-      const toAgent = agents.find(a => a.agentId === to);
-      const toEndpoint = toAgent?.webhookEndpoint || `http://127.0.0.1:${toAgent?.port || 3842}/message`;
-      const r = await fetch(toEndpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (r.ok) {
-        document.getElementById('compose-msg').value = '';
-        addMessage({ ts: Date.now(), from, to, type: 'direct', content });
-      } else {
-        alert(`Send failed: HTTP ${r.status}`);
-      }
+      alert(`Send failed: HTTP ${r.status}`);
     }
   } catch(e) {
     alert(`Send failed: ${e.message}`);
