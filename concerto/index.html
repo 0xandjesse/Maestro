@@ -8,6 +8,7 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
+      --human: #e2c97e;
       --bg: #0d0d0f;
       --surface: #16161a;
       --surface2: #1e1e24;
@@ -214,10 +215,18 @@
     .msg .stage { color: var(--text-dim); font-size: 10px; }
 
     /* Agent color coding */
-    [data-agent="songbird"] { color: var(--accent); }
-    [data-agent="lexicon"] { color: var(--blue); }
-    [data-agent="hermes"] { color: var(--orange); }
+    [data-agent="songbird"]   { color: var(--accent); }
+    [data-agent="lexicon"]    { color: var(--blue); }
+    [data-agent="hermes"]     { color: var(--orange); }
     [data-agent="hermes-lex"] { color: var(--pink); }
+    [data-agent="jesse"]      { color: var(--human); font-style: italic; }
+
+    /* Human message highlight */
+    .msg.human-msg {
+      background: rgba(226, 201, 126, 0.05);
+      border-left: 2px solid var(--human);
+    }
+    .type-badge.human { background: rgba(226,201,126,0.15); color: var(--human); }
 
     /* ── Status panel ── */
     .status-grid {
@@ -372,11 +381,13 @@ let msgCount = 0;
 
 // ── Agent colors ──
 const AGENT_COLORS = {
-  songbird: 'var(--accent)',
-  lexicon:  'var(--blue)',
-  hermes:   'var(--orange)',
-  'hermes-lex': 'var(--pink)',
+  songbird:    'var(--accent)',
+  lexicon:     'var(--blue)',
+  hermes:      'var(--orange)',
+  'hermes-lex':'var(--pink)',
+  jesse:       'var(--human)',
 };
+const HUMAN_ID = 'jesse';
 function agentColor(id) {
   return AGENT_COLORS[id] || 'var(--text)';
 }
@@ -406,14 +417,19 @@ function renderMsg(m) {
   const content = m.content || '';
   const stageHtml = m.stageId ? `<span class="stage">[${m.stageId.slice(0,8)}]</span>` : '';
 
+  const isHuman = m.from === HUMAN_ID || m.type === 'human';
+  if (isHuman) row.classList.add('human-msg');
+
+  const fromLabel = m.from === HUMAN_ID ? '👤 jesse' : m.from;
+  const typeBadgeClass = isHuman ? 'type-badge human' : 'type-badge';
   row.innerHTML = `
     <span class="ts">${fmtTime(m.ts)}</span>
     <span class="route">
-      <span class="from" data-agent="${m.from}" style="color:${agentColor(m.from)}">${m.from}</span>
+      <span class="from" data-agent="${m.from}" style="color:${agentColor(m.from)}">${escHtml(fromLabel)}</span>
       <span class="arrow">→</span>
       <span class="to" data-agent="${m.to}" style="color:${agentColor(m.to)}">${m.to}</span>
     </span>
-    <span class="type-badge">${m.type}</span>
+    <span class="${typeBadgeClass}">${m.type}</span>
     <span class="content">${escHtml(content)} ${stageHtml}</span>
   `;
   return row;
@@ -545,18 +561,29 @@ function populateComposeSelects() {
   const toSel = document.getElementById('compose-to');
   const prevFrom = fromSel.value;
   const prevTo = toSel.value;
-  fromSel.innerHTML = '<option value="">from...</option>';
+
+  // FROM: jesse first, then agents
+  fromSel.innerHTML = '';
+  const humanOpt = new Option('👤 jesse (you)', HUMAN_ID);
+  humanOpt.style.color = 'var(--human)';
+  fromSel.appendChild(humanOpt);
+  const sep = new Option('── agents ──', '', true, false);
+  sep.disabled = true;
+  fromSel.appendChild(sep);
+  agents.forEach(a => {
+    const opt = new Option(a.agentId, a.agentId);
+    if (a.agentId === prevFrom) opt.selected = true;
+    fromSel.appendChild(opt);
+  });
+  if (!prevFrom || prevFrom === HUMAN_ID) fromSel.value = HUMAN_ID;
+
+  // TO: agents only
   toSel.innerHTML = '<option value="">to...</option>';
   agents.forEach(a => {
-    const optF = new Option(a.agentId, a.agentId);
-    const optT = new Option(a.agentId, a.agentId);
-    if (a.agentId === prevFrom) optF.selected = true;
-    if (a.agentId === prevTo) optT.selected = true;
-    fromSel.appendChild(optF);
-    toSel.appendChild(optT);
+    const opt = new Option(a.agentId, a.agentId);
+    if (a.agentId === prevTo) opt.selected = true;
+    toSel.appendChild(opt);
   });
-  // Default from=songbird
-  if (!prevFrom) fromSel.value = 'songbird';
 }
 
 // ── Status panel ──
@@ -624,32 +651,55 @@ document.getElementById('compose-send').addEventListener('click', async () => {
   const btn = document.getElementById('compose-send');
   btn.disabled = true;
   try {
-    const fromAgent = agents.find(a => a.agentId === from);
-    const fromPort = fromAgent?.port || fromAgent?.webhookPort || 3842;
-    // POST directly to the sender's /message endpoint, addressed to recipient
-    const body = {
-      id: Math.random().toString(36).slice(2),
-      type: 'direct',
-      content,
-      sender: { agentId: from },
-      recipient: to,
-      timestamp: Date.now(),
-      version: '3.2',
-    };
-    // Route via sender's transport — post to recipient's endpoint
-    const toAgent = agents.find(a => a.agentId === to);
-    const toEndpoint = toAgent?.webhookEndpoint || `http://127.0.0.1:${(toAgent?.port || 3842)}/message`;
-    const r = await fetch(toEndpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (r.ok) {
-      document.getElementById('compose-msg').value = '';
-      // Add to local feed immediately
-      addMessage({ ts: Date.now(), from, to, type: 'direct', content });
+    if (from === HUMAN_ID) {
+      // Human message: inject directly into the recipient agent's OpenClaw session
+      // Routes via the Maestro API which delivers it as a session message
+      const toAgent = agents.find(a => a.agentId === to);
+      const toEndpoint = toAgent?.webhookEndpoint || `http://127.0.0.1:${toAgent?.port || 3842}/message`;
+      const body = {
+        id: Math.random().toString(36).slice(2),
+        type: 'direct',
+        content: `[Jesse via Concerto]: ${content}`,
+        sender: { agentId: HUMAN_ID, displayName: 'Jesse', human: true },
+        recipient: to,
+        timestamp: Date.now(),
+        version: '3.2',
+      };
+      const r = await fetch(toEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (r.ok) {
+        document.getElementById('compose-msg').value = '';
+        addMessage({ ts: Date.now(), from: HUMAN_ID, to, type: 'human', content });
+      } else {
+        alert(`Send failed: HTTP ${r.status}`);
+      }
     } else {
-      alert(`Send failed: HTTP ${r.status}`);
+      // Agent-to-agent message: post to recipient's /message endpoint
+      const body = {
+        id: Math.random().toString(36).slice(2),
+        type: 'direct',
+        content,
+        sender: { agentId: from },
+        recipient: to,
+        timestamp: Date.now(),
+        version: '3.2',
+      };
+      const toAgent = agents.find(a => a.agentId === to);
+      const toEndpoint = toAgent?.webhookEndpoint || `http://127.0.0.1:${toAgent?.port || 3842}/message`;
+      const r = await fetch(toEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (r.ok) {
+        document.getElementById('compose-msg').value = '';
+        addMessage({ ts: Date.now(), from, to, type: 'direct', content });
+      } else {
+        alert(`Send failed: HTTP ${r.status}`);
+      }
     }
   } catch(e) {
     alert(`Send failed: ${e.message}`);
