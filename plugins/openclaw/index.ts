@@ -246,7 +246,12 @@ export default definePluginEntry({
                 const from = msg.sender?.agentId ?? msg.from ?? 'unknown';
                 const content = msg.content ?? msg.text ?? JSON.stringify(msg);
                 const venueCtx = msg.venueId ? ` (Venue: ${msg.venueId})` : '';
-                const text = `[Maestro message from ${from}${venueCtx}]: ${content}\n\n(Reply via maestro_send to ${from} so your response appears in the Concerto feed.)`;
+                // If sender is human (jesse), reply to songbird as proxy since jesse isn't a routable peer
+                const replyTarget = from === 'jesse' ? 'songbird' : from;
+                const replyHint = from === 'jesse'
+                  ? `(Jesse sent this via Concerto. Reply via maestro_send to songbird and it will appear in the feed.)`
+                  : `(Reply via maestro_send to ${from} so your response appears in the Concerto feed.)`;
+                const text = `[Maestro message from ${from}${venueCtx}]: ${content}\n\n${replyHint}`;
 
                 const gatewayUrl = 'http://127.0.0.1:18789';
                 const hookToken = '06fe84970c2ba322f6e59e007145f015f862be85e72823265fad2b3b8ced1069';
