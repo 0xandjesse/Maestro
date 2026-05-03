@@ -253,9 +253,9 @@ export default definePluginEntry({
                 const isDirect = msg.type === 'direct';
 
                 if (isDirect) {
-                  // Conversational: route to persistent named session so context is preserved
-                  // and the exchange is observable. Session key: session:agentId:from
-                  const sessionKey = `session:${agentId}:${from}`;
+                  // Route to agent's main session so it has full context (SOUL.md, AGENTS.md, memory)
+                  // Isolated sessions boot cold with no personality — useless for conversational messages
+                  const sessionKey = `agent:${agentId}:main`;
                   fetch(`${gatewayUrl}/hooks/agent`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${hookToken}` },
@@ -264,13 +264,11 @@ export default definePluginEntry({
                       agentId,
                       name: `Maestro from ${from}`,
                       wakeMode: 'now',
-                      // Direct messages: use agent's native model (no override)
-                      // so conversational turns use the right model (Sonnet for songbird, etc.)
                       sessionKey,
                     }),
                     signal: AbortSignal.timeout(5000),
                   }).then(r => {
-                    if (r.ok) api.logger.info(`Maestro: routed direct message to persistent session ${sessionKey} (from ${from})`);
+                    if (r.ok) api.logger.info(`Maestro: routed direct message to main session for ${agentId} (from ${from})`);
                     else api.logger.warn(`Maestro: hooks API rejected for direct message: ${r.status}`);
                   }).catch(e => {
                     api.logger.warn(`Maestro: hooks API failed for direct message (${e.message}), falling back to enqueue`);
