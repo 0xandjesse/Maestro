@@ -774,22 +774,16 @@ export default definePluginEntry({
             return;
           }
 
-          // Serve Concerto UI for root and /index.html
-          // Serve Concerto UI for any unmatched GET (catch-all SPA)
-          if (req.method === 'GET') {
-            const uiPath = 'C:\\Users\\there\\Projects\\Maestro\\concerto\\index.html';
-            try {
-              const html = readFileSync(uiPath, 'utf8');
-              res.writeHead(200, { 'Content-Type': 'text/html' });
-              res.end(html);
-            } catch (e: any) {
-              res.writeHead(404, { 'Content-Type': 'text/plain' });
-              res.end('Concerto UI not found: ' + e.message);
-            }
-            return;
+          // Catch-all: serve Concerto UI for any unmatched request
+          const uiPath = 'C:\\Users\\there\\Projects\\Maestro\\concerto\\index.html';
+          try {
+            const html = readFileSync(uiPath, 'utf8');
+            res.writeHead(200, { 'Content-Type': 'text/html' });
+            res.end(html);
+          } catch (e: any) {
+            res.writeHead(503, { 'Content-Type': 'text/plain' });
+            res.end('Concerto UI not found: ' + (e as any).message);
           }
-          res.writeHead(404, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Not found' }));
         });
 
         await new Promise<void>((resolve) => {
