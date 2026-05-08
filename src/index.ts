@@ -17,7 +17,7 @@ export type {
   TruncationMode,
   VerificationResult,
   VerificationStatus,
-  VenueRules,
+  StageRules,
 } from './types/index.js';
 
 // Crypto primitives
@@ -70,26 +70,26 @@ export { MdnsRegistry } from './transport/MdnsRegistry.js';
 export type { MdnsRegistryOptions } from './transport/MdnsRegistry.js';
 
 // SDK
-export { Maestro, VenueHandle } from './sdk/index.js';
+export { Maestro, StageHandle } from './sdk/index.js';
 
-// Venue
+// Stage
 export type {
-  Venue,
-  VenueMember,
-  VenueHierarchy,
-  VenueStatus,
-  VenueEvent,
-  VenueEventType,
+  Stage,
+  StageMember,
+  StageHierarchy,
+  StageStatus,
+  StageEvent,
+  StageEventType,
   EntryMode,
   MemberVisibility,
   Permission,
   JoinRequest,
   JoinResponse,
   JoinStatus,
-  CreateVenueRequest,
-  CreateVenueResponse,
+  CreateStageRequest,
+  CreateStageResponse,
   RoleTransferRequest,
   PermissionCheckResult,
-} from './venue/index.js';
-export { VenueManager, DEFAULT_PERMISSIONS, enforceProvenancePolicy } from './venue/index.js';
-export type { EnforcementResult } from './venue/index.js';
+} from './stage/index.js';
+export { StageManager, DEFAULT_PERMISSIONS, enforceProvenancePolicy } from './stage/index.js';
+export type { EnforcementResult } from './stage/index.js';

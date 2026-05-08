@@ -13,8 +13,8 @@ export type TransportMessageType =
   | 'broadcast'
   | 'report'        // Worker → supervisor
   | 'assign'        // Supervisor → worker
-  | 'venue:invitation'
-  | 'venue:announcement'
+  | 'stage:invitation'
+  | 'stage:announcement'
   | 'blackboard:update';
 
 // ----------------------------------------------------------
@@ -43,17 +43,17 @@ export interface Artifact {
 export interface WebhookEvent {
   eventId: string;
   timestamp: number;
-  venueId: string;
+  stageId: string;
   type:
     | 'message'
     | 'member:joined'
     | 'member:left'
     | 'role:changed'
     | 'blackboard:updated'
-    | 'venue:closed'
-    | 'venue:invitation';
+    | 'stage:closed'
+    | 'stage:invitation';
   payload: Record<string, unknown>;
-  /** Signed by Venue host for verification */
+  /** Signed by Stage host for verification */
   signature: string;
 }
 

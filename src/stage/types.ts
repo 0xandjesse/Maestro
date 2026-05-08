@@ -1,5 +1,5 @@
 // ============================================================
-// Maestro Protocol — Venue Types
+// Maestro Protocol — Stage Types
 // ============================================================
 
 import { ProvenancePolicy } from '../types/index.js';
@@ -16,31 +16,31 @@ export type Permission =
   | 'member:invite'
   | 'member:remove'
   | 'role:assign'
-  | 'venue:close'
-  | 'venue:transfer';
+  | 'stage:close'
+  | 'stage:transfer';
 
 // ----------------------------------------------------------
-// Venue Rules
+// Stage Rules
 // ----------------------------------------------------------
 
 export type EntryMode = 'open' | 'invitation' | 'approval' | 'assignment';
 export type MemberVisibility = 'all' | 'role-based' | 'hierarchy';
 
-export interface VenueHierarchy {
+export interface StageHierarchy {
   roles: string[];
   /** e.g. { worker: 'lead', cmo: 'coo' } */
   reportingChain: Record<string, string>;
   defaultRole: string;
 }
 
-export interface VenueRules {
+export interface StageRules {
   entryMode: EntryMode;
   maxMembers?: number;
   memberVisibility: MemberVisibility;
-  hierarchy?: VenueHierarchy;
+  hierarchy?: StageHierarchy;
   /** Permission map: role → list of allowed permissions */
   permissions: Record<string, Permission[]>;
-  /** Optional provenance requirements for messages in this Venue */
+  /** Optional provenance requirements for messages in this Stage */
   provenancePolicy?: ProvenancePolicy;
 }
 
@@ -48,7 +48,7 @@ export interface VenueRules {
 // Members
 // ----------------------------------------------------------
 
-export interface VenueMember {
+export interface StageMember {
   agentId: string;
   role: string;
   joinedAt: number;
@@ -58,24 +58,24 @@ export interface VenueMember {
 }
 
 // ----------------------------------------------------------
-// Venue Status
+// Stage Status
 // ----------------------------------------------------------
 
-export type VenueStatus = 'created' | 'active' | 'closed';
+export type StageStatus = 'created' | 'active' | 'closed';
 
 // ----------------------------------------------------------
-// Venue
+// Stage
 // ----------------------------------------------------------
 
-export interface Venue {
+export interface Stage {
   id: string;
   name: string;
   hostId: string;
-  rules: VenueRules;
-  members: VenueMember[];
+  rules: StageRules;
+  members: StageMember[];
   createdAt: number;
   expiresAt?: number;
-  status: VenueStatus;
+  status: StageStatus;
 }
 
 // ----------------------------------------------------------
@@ -98,26 +98,26 @@ export type JoinStatus = 'accepted' | 'pending' | 'rejected';
 
 export interface JoinResponse {
   status: JoinStatus;
-  venueId?: string;
+  stageId?: string;
   role?: string;
   supervisorId?: string;
   blackboard?: {
     httpEndpoint: string;
     websocket?: string;
   };
-  members?: VenueMember[];
-  rules?: VenueRules;
+  members?: StageMember[];
+  rules?: StageRules;
   requestId?: string;  // For pending status
   reason?: string;     // For rejected status
 }
 
 // ----------------------------------------------------------
-// Venue Creation
+// Stage Creation
 // ----------------------------------------------------------
 
-export interface CreateVenueRequest {
+export interface CreateStageRequest {
   name: string;
-  rules: VenueRules;
+  rules: StageRules;
   initialMembers?: Array<{
     agentId: string;
     role: string;
@@ -126,8 +126,8 @@ export interface CreateVenueRequest {
   expiresAt?: number;
 }
 
-export interface CreateVenueResponse {
-  venueId: string;
+export interface CreateStageResponse {
+  stageId: string;
   joinEndpoint: string;
 }
 
@@ -142,25 +142,25 @@ export interface RoleTransferRequest {
 }
 
 // ----------------------------------------------------------
-// Venue Events
+// Stage Events
 // ----------------------------------------------------------
 
-export type VenueEventType =
+export type StageEventType =
   | 'message'
   | 'member:joined'
   | 'member:left'
   | 'role:changed'
   | 'blackboard:updated'
-  | 'venue:closed'
-  | 'venue:invitation';
+  | 'stage:closed'
+  | 'stage:invitation';
 
-export interface VenueEvent {
+export interface StageEvent {
   eventId: string;
   timestamp: number;
-  venueId: string;
-  type: VenueEventType;
+  stageId: string;
+  type: StageEventType;
   payload: Record<string, unknown>;
-  /** Signed by Venue host for verification */
+  /** Signed by Stage host for verification */
   signature: string;
 }
 

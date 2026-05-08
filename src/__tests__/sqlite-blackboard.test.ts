@@ -11,9 +11,9 @@
 import { SqliteBlackboard } from '../blackboard/SqliteBlackboard.js';
 import { BlackboardEntry } from '../blackboard/types.js';
 
-function makeBB(venueId = 'venue-test'): SqliteBlackboard {
+function makeBB(stageId = 'stage-test'): SqliteBlackboard {
   // ':memory:' = ephemeral SQLite DB — no files left behind
-  return new SqliteBlackboard({ path: ':memory:', venueId });
+  return new SqliteBlackboard({ path: ':memory:', stageId });
 }
 
 // ----------------------------------------------------------
@@ -161,7 +161,7 @@ describe('SqliteBlackboard — pub/sub', () => {
 });
 
 describe('SqliteBlackboard — lifecycle', () => {
-  it('clear removes all keys for this venue', async () => {
+  it('clear removes all keys for this stage', async () => {
     const bb = makeBB();
     await bb.set('a', 1, 'Alpha');
     await bb.set('b', 2, 'Alpha');
@@ -181,20 +181,20 @@ describe('SqliteBlackboard — lifecycle', () => {
 });
 
 describe('SqliteBlackboard — venue namespacing', () => {
-  it('different venueIds are isolated in the same DB file', async () => {
+  it('different stageIds are isolated in the same DB file', async () => {
     // Both share the same in-memory DB handle would conflict —
     // here we use separate instances with separate :memory: DBs
-    // (true file-level isolation is tested conceptually via venueId prefix)
-    const bb1 = new SqliteBlackboard({ path: ':memory:', venueId: 'venue-1' });
-    const bb2 = new SqliteBlackboard({ path: ':memory:', venueId: 'venue-2' });
+    // (true file-level isolation is tested conceptually via stageId prefix)
+    const bb1 = new SqliteBlackboard({ path: ':memory:', stageId: 'stage-1' });
+    const bb2 = new SqliteBlackboard({ path: ':memory:', stageId: 'stage-2' });
 
-    await bb1.set('key', 'venue1-value', 'Alpha');
+    await bb1.set('key', 'stage1-value', 'Alpha');
     // bb2 is a separate :memory: DB — its own isolated store
     expect(await bb2.get('key')).toBeUndefined();
   });
 
-  it('clears only its own venue namespace', async () => {
-    const bb = new SqliteBlackboard({ path: ':memory:', venueId: 'venue-1' });
+  it('clears only its own stage namespace', async () => {
+    const bb = new SqliteBlackboard({ path: ':memory:', stageId: 'stage-1' });
     await bb.set('k', 'v', 'Alpha');
     await bb.clear();
     expect(await bb.get('k')).toBeUndefined();
@@ -209,10 +209,11 @@ describe('SqliteBlackboard — persistence simulation', () => {
     const bb = makeBB();
     await bb.set('persisted', { alive: true }, 'Alpha');
 
-    // Simulate reading back (same DB, same venue)
+    // Simulate reading back (same DB, same stage)
     const val = await bb.get('persisted');
     expect(val).toEqual({ alive: true });
 
     bb.close();
   });
 });
+

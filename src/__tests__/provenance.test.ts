@@ -201,10 +201,10 @@ describe('Provenance truncation', () => {
 });
 
 // ----------------------------------------------------------
-// Venue policy tests
+// Stage policy tests
 // ----------------------------------------------------------
 
-describe('Venue provenance policy enforcement', () => {
+describe('Stage provenance policy enforcement', () => {
   it('rejects message without provenance when required', () => {
     const message: MaestroMessage = {
       id: '1',
@@ -216,7 +216,7 @@ describe('Venue provenance policy enforcement', () => {
       version: '3.2',
     };
 
-    // Simulate Venue enforcement
+    // Simulate Stage enforcement
     const requiresProvenance = (msg: MaestroMessage): boolean => {
       return msg.type === 'capability' && !msg.provenance;
     };
@@ -224,3 +224,4 @@ describe('Venue provenance policy enforcement', () => {
     expect(requiresProvenance(message)).toBe(true);
   });
 });
+

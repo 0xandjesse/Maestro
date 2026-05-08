@@ -26,17 +26,17 @@ import {
 export interface SqliteBlackboardOptions {
   /** Path to SQLite file, or ':memory:' for ephemeral. Default: ':memory:' */
   path?: string;
-  /** Venue ID — used as a namespace prefix in multi-venue DBs */
-  venueId?: string;
+  /** Stage ID — used as a namespace prefix in multi-stage DBs */
+  stageId?: string;
 }
 
 export class SqliteBlackboard extends EventEmitter implements SharedBlackboard {
   private db: DB;
-  private venueId: string;
+  private stageId: string;
 
   constructor(options: SqliteBlackboardOptions = {}) {
     super();
-    this.venueId = options.venueId ?? 'default';
+    this.stageId = options.stageId ?? 'default';
     this.db = new Database(options.path ?? ':memory:');
     this.init();
   }
@@ -48,17 +48,17 @@ export class SqliteBlackboard extends EventEmitter implements SharedBlackboard {
   private init(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS blackboard (
-        venue_id   TEXT    NOT NULL,
+        stage_id   TEXT    NOT NULL,
         key        TEXT    NOT NULL,
         value      TEXT    NOT NULL,   -- JSON-serialised
         written_by TEXT    NOT NULL,
         written_at INTEGER NOT NULL,
         version    INTEGER NOT NULL,
-        PRIMARY KEY (venue_id, key)
+        PRIMARY KEY (stage_id, key)
       );
 
-      CREATE INDEX IF NOT EXISTS idx_bb_venue
-        ON blackboard (venue_id);
+      CREATE INDEX IF NOT EXISTS idx_bb_stage
+        ON blackboard (stage_id);
     `);
   }
 
@@ -80,15 +80,15 @@ export class SqliteBlackboard extends EventEmitter implements SharedBlackboard {
   async list(prefix?: string): Promise<string[]> {
     if (prefix) {
       const stmt = this.db.prepare(
-        'SELECT key FROM blackboard WHERE venue_id = ? AND key LIKE ?'
+        'SELECT key FROM blackboard WHERE stage_id = ? AND key LIKE ?'
       );
-      const rows = stmt.all(this.venueId, `${prefix}%`) as { key: string }[];
+      const rows = stmt.all(this.stageId, `${prefix}%`) as { key: string }[];
       return rows.map(r => r.key);
     }
     const stmt = this.db.prepare(
-      'SELECT key FROM blackboard WHERE venue_id = ?'
+      'SELECT key FROM blackboard WHERE stage_id = ?'
     );
-    const rows = stmt.all(this.venueId) as { key: string }[];
+    const rows = stmt.all(this.stageId) as { key: string }[];
     return rows.map(r => r.key);
   }
 
@@ -101,9 +101,9 @@ export class SqliteBlackboard extends EventEmitter implements SharedBlackboard {
     const version = (existing?.version ?? 0) + 1;
 
     const stmt = this.db.prepare(`
-      INSERT INTO blackboard (venue_id, key, value, written_by, written_at, version)
+      INSERT INTO blackboard (stage_id, key, value, written_by, written_at, version)
       VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT (venue_id, key) DO UPDATE SET
+      ON CONFLICT (stage_id, key) DO UPDATE SET
         value      = excluded.value,
         written_by = excluded.written_by,
         written_at = excluded.written_at,
@@ -111,7 +111,7 @@ export class SqliteBlackboard extends EventEmitter implements SharedBlackboard {
     `);
 
     stmt.run(
-      this.venueId,
+      this.stageId,
       key,
       JSON.stringify(value),
       writtenBy,
@@ -140,9 +140,9 @@ export class SqliteBlackboard extends EventEmitter implements SharedBlackboard {
     };
 
     const stmt = this.db.prepare(
-      'DELETE FROM blackboard WHERE venue_id = ? AND key = ?'
+      'DELETE FROM blackboard WHERE stage_id = ? AND key = ?'
     );
-    stmt.run(this.venueId, key);
+    stmt.run(this.stageId, key);
 
     this.emit(`key:${key}`, tombstone);
     this.emit('*', tombstone);
@@ -168,12 +168,12 @@ export class SqliteBlackboard extends EventEmitter implements SharedBlackboard {
   // ----------------------------------------------------------
 
   async clear(): Promise<void> {
-    this.db.prepare('DELETE FROM blackboard WHERE venue_id = ?').run(this.venueId);
+    this.db.prepare('DELETE FROM blackboard WHERE stage_id = ?').run(this.stageId);
   }
 
   async snapshot(): Promise<Record<string, BlackboardEntry>> {
-    const stmt = this.db.prepare('SELECT * FROM blackboard WHERE venue_id = ?');
-    const rows = stmt.all(this.venueId) as RawRow[];
+    const stmt = this.db.prepare('SELECT * FROM blackboard WHERE stage_id = ?');
+    const rows = stmt.all(this.stageId) as RawRow[];
     const result: Record<string, BlackboardEntry> = {};
     for (const row of rows) {
       result[row.key] = this.rowToEntry(row);
@@ -181,7 +181,7 @@ export class SqliteBlackboard extends EventEmitter implements SharedBlackboard {
     return result;
   }
 
-  /** Close the underlying DB connection. Call when the Venue is closed. */
+  /** Close the underlying DB connection. Call when the Stage is closed. */
   close(): void {
     this.db.close();
   }
@@ -192,9 +192,9 @@ export class SqliteBlackboard extends EventEmitter implements SharedBlackboard {
 
   private getRow(key: string): RawRow | undefined {
     const stmt = this.db.prepare(
-      'SELECT * FROM blackboard WHERE venue_id = ? AND key = ?'
+      'SELECT * FROM blackboard WHERE stage_id = ? AND key = ?'
     );
-    return stmt.get(this.venueId, key) as RawRow | undefined;
+    return stmt.get(this.stageId, key) as RawRow | undefined;
   }
 
   private rowToEntry(row: RawRow): BlackboardEntry {
@@ -209,7 +209,7 @@ export class SqliteBlackboard extends EventEmitter implements SharedBlackboard {
 }
 
 interface RawRow {
-  venue_id: string;
+  stage_id: string;
   key: string;
   value: string;        // JSON string
   written_by: string;

@@ -1,27 +1,27 @@
 // ============================================================
-// Maestro Protocol — Venue Manager
+// Maestro Protocol — Stage Manager
 // ============================================================
 //
-// Manages Venue lifecycle: creation, member management,
+// Manages Stage lifecycle: creation, member management,
 // permission enforcement, role assignment, and closure.
 //
 // This is an in-process implementation suitable for local mode
-// and testing. Network mode venues delegate to a platform
+// and testing. Network mode stages delegate to a platform
 // host (e.g. TaskMaster API).
 // ============================================================
 
 import { randomUUID } from 'crypto';
 import {
-  CreateVenueRequest,
+  CreateStageRequest,
   JoinRequest,
   JoinResponse,
   Permission,
   PermissionCheckResult,
   RoleTransferRequest,
-  Venue,
-  VenueMember,
-  VenueRules,
-  VenueStatus,
+  Stage,
+  StageMember,
+  StageRules,
+  StageStatus,
 } from './types.js';
 
 // ----------------------------------------------------------
@@ -37,12 +37,12 @@ export const DEFAULT_PERMISSIONS: Record<string, Permission[]> = {
     'member:invite',
     'member:remove',
     'role:assign',
-    'venue:close',
-    'venue:transfer',
+    'stage:close',
+    'stage:transfer',
   ],
   worker: [
     'message:send',
-    'message:broadcast',  // Workers can broadcast in open/peer Venues
+    'message:broadcast',  // Workers can broadcast in open/peer Stages
     'blackboard:read',
     'blackboard:write',
   ],
@@ -52,21 +52,21 @@ export const DEFAULT_PERMISSIONS: Record<string, Permission[]> = {
 };
 
 // ----------------------------------------------------------
-// VenueManager
+// StageManager
 // ----------------------------------------------------------
 
-export class VenueManager {
-  private venues = new Map<string, Venue>();
+export class StageManager {
+  private stages = new Map<string, Stage>();
 
   // ----------------------------------------------------------
   // Create
   // ----------------------------------------------------------
 
-  create(request: CreateVenueRequest, hostId: string): Venue {
+  create(request: CreateStageRequest, hostId: string): Stage {
     const id = randomUUID();
     const now = Date.now();
 
-    const members: VenueMember[] = [];
+    const members: StageMember[] = [];
 
     // Host is always the first member with lead role (or the hierarchy's top role)
     const hostRole = request.rules.hierarchy?.roles[0] ?? 'lead';
@@ -96,7 +96,7 @@ export class VenueManager {
       this.wireHierarchy(members, request.rules.hierarchy.reportingChain);
     }
 
-    const venue: Venue = {
+    const stage: Stage = {
       id,
       name: request.name,
       hostId,
@@ -107,25 +107,25 @@ export class VenueManager {
       ...(request.expiresAt ? { expiresAt: request.expiresAt } : {}),
     };
 
-    this.venues.set(id, venue);
-    return venue;
+    this.stages.set(id, stage);
+    return stage;
   }
 
   // ----------------------------------------------------------
   // Join
   // ----------------------------------------------------------
 
-  processJoin(venueId: string, request: JoinRequest): JoinResponse {
-    const venue = this.venues.get(venueId);
-    if (!venue) {
-      return { status: 'rejected', reason: 'venue_not_found' };
+  processJoin(stageId: string, request: JoinRequest): JoinResponse {
+    const stage = this.stages.get(stageId);
+    if (!stage) {
+      return { status: 'rejected', reason: 'stage_not_found' };
     }
 
-    if (venue.status === 'closed') {
-      return { status: 'rejected', reason: 'venue_closed' };
+    if (stage.status === 'closed') {
+      return { status: 'rejected', reason: 'stage_closed' };
     }
 
-    const rules = venue.rules;
+    const rules = stage.rules;
 
     // Check entry mode
     if (rules.entryMode === 'approval') {
@@ -141,18 +141,18 @@ export class VenueManager {
     }
 
     // Check capacity
-    if (rules.maxMembers && venue.members.length >= rules.maxMembers) {
-      return { status: 'rejected', reason: 'venue_full' };
+    if (rules.maxMembers && stage.members.length >= rules.maxMembers) {
+      return { status: 'rejected', reason: 'stage_full' };
     }
 
     // Already a member?
-    if (venue.members.find(m => m.agentId === request.agentId)) {
+    if (stage.members.find(m => m.agentId === request.agentId)) {
       return { status: 'rejected', reason: 'already_member' };
     }
 
     // Add member with default role
     const defaultRole = rules.hierarchy?.defaultRole ?? 'worker';
-    const member: VenueMember = {
+    const member: StageMember = {
       agentId: request.agentId,
       role: defaultRole,
       joinedAt: Date.now(),
@@ -160,23 +160,23 @@ export class VenueManager {
       subordinateIds: [],
     };
 
-    venue.members.push(member);
-    venue.status = 'active';
+    stage.members.push(member);
+    stage.status = 'active';
 
     // Wire up hierarchy for new member
     if (rules.hierarchy) {
-      this.wireHierarchy(venue.members, rules.hierarchy.reportingChain);
+      this.wireHierarchy(stage.members, rules.hierarchy.reportingChain);
     }
 
-    const supervisor = this.getSupervisor(venue, request.agentId);
+    const supervisor = this.getSupervisor(stage, request.agentId);
 
     return {
       status: 'accepted',
-      venueId: venue.id,
+      stageId: stage.id,
       role: defaultRole,
       supervisorId: supervisor?.agentId,
-      members: this.visibleMembers(venue, request.agentId),
-      rules: venue.rules,
+      members: this.visibleMembers(stage, request.agentId),
+      rules: stage.rules,
     };
   }
 
@@ -185,18 +185,18 @@ export class VenueManager {
   // ----------------------------------------------------------
 
   checkPermission(
-    venueId: string,
+    stageId: string,
     agentId: string,
     permission: Permission,
   ): PermissionCheckResult {
-    const venue = this.venues.get(venueId);
-    if (!venue) return { allowed: false, reason: 'venue_not_found' };
-    if (venue.status === 'closed') return { allowed: false, reason: 'venue_closed' };
+    const stage = this.stages.get(stageId);
+    if (!stage) return { allowed: false, reason: 'stage_not_found' };
+    if (stage.status === 'closed') return { allowed: false, reason: 'stage_closed' };
 
-    const member = venue.members.find(m => m.agentId === agentId);
+    const member = stage.members.find(m => m.agentId === agentId);
     if (!member) return { allowed: false, reason: 'not_a_member' };
 
-    const rolePermissions = venue.rules.permissions[member.role] ?? [];
+    const rolePermissions = stage.rules.permissions[member.role] ?? [];
     if (rolePermissions.includes(permission)) {
       return { allowed: true };
     }
@@ -207,8 +207,8 @@ export class VenueManager {
     };
   }
 
-  requirePermission(venueId: string, agentId: string, permission: Permission): void {
-    const result = this.checkPermission(venueId, agentId, permission);
+  requirePermission(stageId: string, agentId: string, permission: Permission): void {
+    const result = this.checkPermission(stageId, agentId, permission);
     if (!result.allowed) {
       throw new Error(`Permission denied: ${result.reason}`);
     }
@@ -219,59 +219,59 @@ export class VenueManager {
   // ----------------------------------------------------------
 
   assignRole(
-    venueId: string,
+    stageId: string,
     requestingAgentId: string,
     targetAgentId: string,
     newRole: string,
   ): void {
-    this.requirePermission(venueId, requestingAgentId, 'role:assign');
+    this.requirePermission(stageId, requestingAgentId, 'role:assign');
 
-    const venue = this.getVenueOrThrow(venueId);
+    const stage = this.getStageOrThrow(stageId);
 
-    const validRoles = venue.rules.hierarchy?.roles ?? Object.keys(venue.rules.permissions);
+    const validRoles = stage.rules.hierarchy?.roles ?? Object.keys(stage.rules.permissions);
     if (!validRoles.includes(newRole)) {
       throw new Error(`Unknown role: ${newRole}`);
     }
 
-    const member = venue.members.find(m => m.agentId === targetAgentId);
-    if (!member) throw new Error(`Agent ${targetAgentId} is not a member of venue ${venueId}`);
+    const member = stage.members.find(m => m.agentId === targetAgentId);
+    if (!member) throw new Error(`Agent ${targetAgentId} is not a member of stage ${stageId}`);
 
     member.role = newRole;
 
     // Re-wire hierarchy after role change
-    if (venue.rules.hierarchy) {
-      this.wireHierarchy(venue.members, venue.rules.hierarchy.reportingChain);
+    if (stage.rules.hierarchy) {
+      this.wireHierarchy(stage.members, stage.rules.hierarchy.reportingChain);
     }
   }
 
   transferRole(
-    venueId: string,
+    stageId: string,
     requestingAgentId: string,
     request: RoleTransferRequest,
   ): void {
-    this.requirePermission(venueId, requestingAgentId, 'venue:transfer');
-    const venue = this.getVenueOrThrow(venueId);
+    this.requirePermission(stageId, requestingAgentId, 'stage:transfer');
+    const stage = this.getStageOrThrow(stageId);
 
-    const requester = venue.members.find(m => m.agentId === requestingAgentId);
-    const target = venue.members.find(m => m.agentId === request.to);
+    const requester = stage.members.find(m => m.agentId === requestingAgentId);
+    const target = stage.members.find(m => m.agentId === request.to);
 
     if (!requester) throw new Error('Requester not found');
     if (!target) throw new Error(`Transfer target ${request.to} is not a member`);
 
     const prevRole = requester.role;
-    const defaultRole = venue.rules.hierarchy?.defaultRole ?? 'worker';
+    const defaultRole = stage.rules.hierarchy?.defaultRole ?? 'worker';
 
     // Swap roles
     requester.role = defaultRole;
     target.role = request.role;
 
     // Update host if lead transferred
-    if (prevRole === venue.rules.hierarchy?.roles[0]) {
-      venue.hostId = request.to;
+    if (prevRole === stage.rules.hierarchy?.roles[0]) {
+      stage.hostId = request.to;
     }
 
-    if (venue.rules.hierarchy) {
-      this.wireHierarchy(venue.members, venue.rules.hierarchy.reportingChain);
+    if (stage.rules.hierarchy) {
+      this.wireHierarchy(stage.members, stage.rules.hierarchy.reportingChain);
     }
   }
 
@@ -279,27 +279,27 @@ export class VenueManager {
   // Member Management
   // ----------------------------------------------------------
 
-  removeMember(venueId: string, requestingAgentId: string, targetAgentId: string): void {
-    this.requirePermission(venueId, requestingAgentId, 'member:remove');
-    const venue = this.getVenueOrThrow(venueId);
+  removeMember(stageId: string, requestingAgentId: string, targetAgentId: string): void {
+    this.requirePermission(stageId, requestingAgentId, 'member:remove');
+    const stage = this.getStageOrThrow(stageId);
 
-    if (targetAgentId === venue.hostId) {
-      throw new Error('Cannot remove the Venue host. Transfer ownership first.');
+    if (targetAgentId === stage.hostId) {
+      throw new Error('Cannot remove the Stage host. Transfer ownership first.');
     }
 
-    venue.members = venue.members.filter(m => m.agentId !== targetAgentId);
+    stage.members = stage.members.filter(m => m.agentId !== targetAgentId);
 
-    if (venue.rules.hierarchy) {
-      this.wireHierarchy(venue.members, venue.rules.hierarchy.reportingChain);
+    if (stage.rules.hierarchy) {
+      this.wireHierarchy(stage.members, stage.rules.hierarchy.reportingChain);
     }
   }
 
-  leave(venueId: string, agentId: string): void {
-    const venue = this.getVenueOrThrow(venueId);
-    if (agentId === venue.hostId) {
-      throw new Error('Host cannot leave. Close or transfer the Venue first.');
+  leave(stageId: string, agentId: string): void {
+    const stage = this.getStageOrThrow(stageId);
+    if (agentId === stage.hostId) {
+      throw new Error('Host cannot leave. Close or transfer the Stage first.');
     }
-    venue.members = venue.members.filter(m => m.agentId !== agentId);
+    stage.members = stage.members.filter(m => m.agentId !== agentId);
   }
 
   // ----------------------------------------------------------
@@ -308,33 +308,30 @@ export class VenueManager {
 
   /**
    * Returns the list of members visible to a given agent,
-   * respecting the Venue's memberVisibility setting.
+   * respecting the Stage's memberVisibility setting.
    */
-  visibleMembers(venue: Venue, agentId: string): VenueMember[] {
-    switch (venue.rules.memberVisibility) {
+  visibleMembers(stage: Stage, agentId: string): StageMember[] {
+    switch (stage.rules.memberVisibility) {
       case 'all':
-        return [...venue.members];
+        return [...stage.members];
 
       case 'hierarchy': {
-        const member = venue.members.find(m => m.agentId === agentId);
+        const member = stage.members.find(m => m.agentId === agentId);
         if (!member) return [];
-        // Can see: own supervisor + own subordinates + peers under same supervisor
         const supervisorId = member.supervisorId;
-        return venue.members.filter(m => {
+        return stage.members.filter(m => {
           if (m.agentId === agentId) return true;
           if (m.agentId === supervisorId) return true;
           if (member.subordinateIds?.includes(m.agentId)) return true;
-          // Peers: same supervisor
           if (supervisorId && m.supervisorId === supervisorId) return true;
           return false;
         });
       }
 
       case 'role-based': {
-        const member = venue.members.find(m => m.agentId === agentId);
+        const member = stage.members.find(m => m.agentId === agentId);
         if (!member) return [];
-        // Same role can see each other + supervisors
-        return venue.members.filter(m => {
+        return stage.members.filter(m => {
           if (m.agentId === agentId) return true;
           if (m.role === member.role) return true;
           if (m.agentId === member.supervisorId) return true;
@@ -348,24 +345,24 @@ export class VenueManager {
   // Lifecycle
   // ----------------------------------------------------------
 
-  close(venueId: string, requestingAgentId: string): void {
-    this.requirePermission(venueId, requestingAgentId, 'venue:close');
-    const venue = this.getVenueOrThrow(venueId);
-    venue.status = 'closed';
+  close(stageId: string, requestingAgentId: string): void {
+    this.requirePermission(stageId, requestingAgentId, 'stage:close');
+    const stage = this.getStageOrThrow(stageId);
+    stage.status = 'closed';
   }
 
-  forceClose(venueId: string): void {
-    const venue = this.venues.get(venueId);
-    if (venue) venue.status = 'closed';
+  forceClose(stageId: string): void {
+    const stage = this.stages.get(stageId);
+    if (stage) stage.status = 'closed';
   }
 
-  /** Close any venues whose TTL has expired */
+  /** Close any stages whose TTL has expired */
   pruneExpired(): string[] {
     const now = Date.now();
     const closed: string[] = [];
-    for (const [id, venue] of this.venues) {
-      if (venue.expiresAt && now > venue.expiresAt && venue.status !== 'closed') {
-        venue.status = 'closed';
+    for (const [id, stage] of this.stages) {
+      if (stage.expiresAt && now > stage.expiresAt && stage.status !== 'closed') {
+        stage.status = 'closed';
         closed.push(id);
       }
     }
@@ -376,42 +373,42 @@ export class VenueManager {
   // Queries
   // ----------------------------------------------------------
 
-  get(venueId: string): Venue | undefined {
-    return this.venues.get(venueId);
+  get(stageId: string): Stage | undefined {
+    return this.stages.get(stageId);
   }
 
-  getAll(): Venue[] {
-    return [...this.venues.values()];
+  getAll(): Stage[] {
+    return [...this.stages.values()];
   }
 
-  getActive(): Venue[] {
+  getActive(): Stage[] {
     return this.getAll().filter(v => v.status === 'active');
   }
 
-  getMember(venueId: string, agentId: string): VenueMember | undefined {
-    return this.venues.get(venueId)?.members.find(m => m.agentId === agentId);
+  getMember(stageId: string, agentId: string): StageMember | undefined {
+    return this.stages.get(stageId)?.members.find(m => m.agentId === agentId);
   }
 
-  getSupervisor(venue: Venue, agentId: string): VenueMember | undefined {
-    const member = venue.members.find(m => m.agentId === agentId);
+  getSupervisor(stage: Stage, agentId: string): StageMember | undefined {
+    const member = stage.members.find(m => m.agentId === agentId);
     if (!member?.supervisorId) return undefined;
-    return venue.members.find(m => m.agentId === member.supervisorId);
+    return stage.members.find(m => m.agentId === member.supervisorId);
   }
 
-  getSubordinates(venue: Venue, agentId: string): VenueMember[] {
-    const member = venue.members.find(m => m.agentId === agentId);
+  getSubordinates(stage: Stage, agentId: string): StageMember[] {
+    const member = stage.members.find(m => m.agentId === agentId);
     if (!member?.subordinateIds?.length) return [];
-    return venue.members.filter(m => member.subordinateIds!.includes(m.agentId));
+    return stage.members.filter(m => member.subordinateIds!.includes(m.agentId));
   }
 
   // ----------------------------------------------------------
   // Helpers
   // ----------------------------------------------------------
 
-  private getVenueOrThrow(venueId: string): Venue {
-    const venue = this.venues.get(venueId);
-    if (!venue) throw new Error(`Venue ${venueId} not found`);
-    return venue;
+  private getStageOrThrow(stageId: string): Stage {
+    const stage = this.stages.get(stageId);
+    if (!stage) throw new Error(`Stage ${stageId} not found`);
+    return stage;
   }
 
   /**
@@ -419,7 +416,7 @@ export class VenueManager {
    * and each member's role.
    */
   private wireHierarchy(
-    members: VenueMember[],
+    members: StageMember[],
     reportingChain: Record<string, string>,
   ): void {
     // Reset
@@ -432,7 +429,6 @@ export class VenueManager {
       const supervisorRole = reportingChain[member.role];
       if (!supervisorRole) continue;
 
-      // Find the first member with the supervisor role
       const supervisor = members.find(m => m.role === supervisorRole);
       if (!supervisor) continue;
 

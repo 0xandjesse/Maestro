@@ -127,8 +127,8 @@ export type MessageType =
   | 'credential'
   | 'financial'
   | 'presence'
-  | 'venue:invitation'
-  | 'venue:announcement'
+  | 'stage:invitation'
+  | 'stage:announcement'
   | 'custom';
 
 // ----------------------------------------------------------
@@ -156,13 +156,13 @@ export interface MaestroMessage {
 
   /**
    * Optional provenance chain.
-   * Agents and Venues determine when required based on risk profile.
-   * See ProvenancePolicy for Venue-level enforcement.
+   * Agents and Stages determine when required based on risk profile.
+   * See ProvenancePolicy for Stage-level enforcement.
    */
   provenance?: Provenance;
 
-  /** Optional Venue context */
-  venueId?: string;
+  /** Optional Stage context */
+  stageId?: string;
 
   /** replyTo message ID for threading / backwards provenance */
   replyTo?: string;
@@ -172,7 +172,7 @@ export interface MaestroMessage {
 }
 
 // ----------------------------------------------------------
-// Venue Provenance Policy
+// Stage Provenance Policy
 // ----------------------------------------------------------
 
 export interface ProvenancePolicy {
@@ -195,8 +195,8 @@ export interface ProvenancePolicy {
   minimumTruncationMode?: ProvenanceMode;
 }
 
-export interface VenueRules {
-  venueId: string;
+export interface StageRules {
+  stageId: string;
   name?: string;
   provenancePolicy?: ProvenancePolicy;
   [key: string]: unknown;

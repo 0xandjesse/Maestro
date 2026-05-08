@@ -106,7 +106,7 @@ describe('NetworkTransport — cross-agent delivery', () => {
     beta.onMessage('*', (msg) => { received.push(msg); });
 
     // Alpha creates a venue and builds a message to Beta
-    const venue = alpha.createOpenVenue('Room');
+    const venue = alpha.createOpenStage('Room');
     const msg = await venue.send('Beta', 'Hello over HTTP');
 
     // Alpha sends to Beta's webhook endpoint
@@ -126,7 +126,7 @@ describe('NetworkTransport — cross-agent delivery', () => {
     const receivedByBeta: MaestroMessage[] = [];
     beta.onMessage('*', (msg) => { receivedByBeta.push(msg); });
 
-    const venue = alpha.createOpenVenue('Room');
+    const venue = alpha.createOpenStage('Room');
     const msg = await venue.broadcast('Hello everyone');
 
     // Send to Beta (in a real multi-agent setup, this would be all members)
@@ -139,7 +139,7 @@ describe('NetworkTransport — cross-agent delivery', () => {
   });
 
   it('returns failure for unreachable endpoint', async () => {
-    const venue = alpha.createOpenVenue('Room');
+    const venue = alpha.createOpenStage('Room');
     const msg = await venue.send('Ghost', 'Hello');
 
     const result = await alpha.sendRemote(msg, 'http://localhost:19999/maestro/webhook');
@@ -149,13 +149,13 @@ describe('NetworkTransport — cross-agent delivery', () => {
 
   it('returns 422 and does not retry for policy rejection', async () => {
     // Beta has a strict Venue that requires provenance on capability messages
-    const secureVenue = beta.createVenue({
-      name: 'Secure Venue',
+    const secureVenue = beta.createStage({
+      name: 'Secure Stage',
       rules: {
         entryMode: 'open',
         memberVisibility: 'all',
         permissions: {
-          lead: ['message:send', 'message:broadcast', 'blackboard:read', 'blackboard:write', 'member:invite', 'member:remove', 'role:assign', 'venue:close', 'venue:transfer'],
+          lead: ['message:send', 'message:broadcast', 'blackboard:read', 'blackboard:write', 'member:invite', 'member:remove', 'role:assign', 'stage:close', 'stage:transfer'],
           worker: ['message:send', 'blackboard:read', 'blackboard:write'],
         },
         provenancePolicy: { requiredFor: ['capability'] },
@@ -171,7 +171,7 @@ describe('NetworkTransport — cross-agent delivery', () => {
       recipient: 'Beta',
       timestamp: Date.now(),
       version: '3.2',
-      venueId: secureVenue.venueId,
+      stageId: secureVenue.stageId,
     };
 
     const result = await alpha.sendRemote(msg, beta.webhookEndpoint);
@@ -208,3 +208,4 @@ describe('Maestro lifecycle with HTTP', () => {
     await m.stop();
   });
 });
+

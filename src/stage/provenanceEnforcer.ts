@@ -1,9 +1,9 @@
 // ============================================================
-// Maestro Protocol — Venue Provenance Enforcer
+// Maestro Protocol — Stage Provenance Enforcer
 // ============================================================
 //
-// Enforces a Venue's ProvenancePolicy against an incoming
-// MaestroMessage. This sits at L1 (Venue rules), not L0.
+// Enforces a Stage's ProvenancePolicy against an incoming
+// MaestroMessage. This sits at L1 (Stage rules), not L0.
 // ============================================================
 
 import { MaestroMessage, ProvenanceMode } from '../types/index.js';
@@ -22,16 +22,15 @@ export interface EnforcementResult {
 }
 
 /**
- * Check whether a message satisfies a Venue's provenance policy.
+ * Check whether a message satisfies a Stage's provenance policy.
  *
  * @param message  The incoming MaestroMessage
- * @param policy   The Venue's ProvenancePolicy
+ * @param policy   The Stage's ProvenancePolicy
  */
 export function enforceProvenancePolicy(
   message: MaestroMessage,
   policy: ProvenancePolicy,
 ): EnforcementResult {
-  // Is provenance required for this message type?
   const requiresProvenance = policy.requiredFor?.includes(message.type);
 
   if (requiresProvenance && !message.provenance) {
@@ -42,13 +41,11 @@ export function enforceProvenancePolicy(
   }
 
   if (!message.provenance) {
-    // Provenance not required and not present — accepted
     return { accepted: true };
   }
 
   const provenance = message.provenance;
 
-  // Full chain required for certain types?
   if (policy.requireFullChainFor?.includes(message.type) && provenance.mode !== 'full') {
     return {
       accepted: false,
@@ -56,7 +53,6 @@ export function enforceProvenancePolicy(
     };
   }
 
-  // Truncated chains allowed?
   const isTruncated = provenance.mode !== 'full';
   if (isTruncated && policy.allowTruncated === false) {
     return {
@@ -65,7 +61,6 @@ export function enforceProvenancePolicy(
     };
   }
 
-  // Minimum truncation mode check
   if (policy.minimumTruncationMode) {
     const minRank = MODE_RANK[policy.minimumTruncationMode];
     const actualRank = MODE_RANK[provenance.mode];
@@ -77,7 +72,6 @@ export function enforceProvenancePolicy(
     }
   }
 
-  // Chain length checks (for full chains)
   if (provenance.mode === 'full' && provenance.chain) {
     const chainLen = provenance.chain.length;
 

@@ -1,13 +1,13 @@
-import { VenueManager, DEFAULT_PERMISSIONS } from '../venue/VenueManager.js';
-import { enforceProvenancePolicy } from '../venue/provenanceEnforcer.js';
-import { CreateVenueRequest, VenueRules } from '../venue/types.js';
+import { StageManager, DEFAULT_PERMISSIONS } from '../stage/StageManager.js';
+import { enforceProvenancePolicy } from '../stage/provenanceEnforcer.js';
+import { CreateStageRequest, StageRules } from '../stage/types.js';
 import { MaestroMessage } from '../types/index.js';
 
 // ----------------------------------------------------------
 // Helpers
 // ----------------------------------------------------------
 
-function makeRules(overrides: Partial<VenueRules> = {}): VenueRules {
+function makeRules(overrides: Partial<StageRules> = {}): StageRules {
   return {
     entryMode: 'open',
     memberVisibility: 'all',
@@ -19,21 +19,21 @@ function makeRules(overrides: Partial<VenueRules> = {}): VenueRules {
   };
 }
 
-function makeCreateRequest(overrides: Partial<CreateVenueRequest> = {}): CreateVenueRequest {
+function makeCreateRequest(overrides: Partial<CreateStageRequest> = {}): CreateStageRequest {
   return {
-    name: 'Test Venue',
+    name: 'Test Stage',
     rules: makeRules(),
     ...overrides,
   };
 }
 
 // ----------------------------------------------------------
-// VenueManager tests
+// StageManager tests
 // ----------------------------------------------------------
 
-describe('VenueManager — creation', () => {
+describe('StageManager — creation', () => {
   it('creates a venue with host as lead', () => {
-    const mgr = new VenueManager();
+    const mgr = new StageManager();
     const venue = mgr.create(makeCreateRequest(), 'Alpha');
 
     expect(venue.id).toBeTruthy();
@@ -44,7 +44,7 @@ describe('VenueManager — creation', () => {
   });
 
   it('creates with initial members', () => {
-    const mgr = new VenueManager();
+    const mgr = new StageManager();
     const venue = mgr.create(
       makeCreateRequest({
         initialMembers: [
@@ -60,7 +60,7 @@ describe('VenueManager — creation', () => {
   });
 
   it('wires hierarchy on creation', () => {
-    const mgr = new VenueManager();
+    const mgr = new StageManager();
     const venue = mgr.create(
       makeCreateRequest({
         rules: makeRules({
@@ -82,9 +82,9 @@ describe('VenueManager — creation', () => {
   });
 });
 
-describe('VenueManager — joining', () => {
-  it('accepts join to open venue', () => {
-    const mgr = new VenueManager();
+describe('StageManager — joining', () => {
+  it('accepts join to open stage', () => {
+    const mgr = new StageManager();
     const venue = mgr.create(makeCreateRequest(), 'Alpha');
 
     const result = mgr.processJoin(venue.id, {
@@ -98,8 +98,8 @@ describe('VenueManager — joining', () => {
     expect(result.role).toBe('worker');
   });
 
-  it('rejects join without invite token for invitation-mode venue', () => {
-    const mgr = new VenueManager();
+  it('rejects join without invite token for invitation-mode stage', () => {
+    const mgr = new StageManager();
     const venue = mgr.create(makeCreateRequest({ rules: makeRules({ entryMode: 'invitation' }) }), 'Alpha');
 
     const result = mgr.processJoin(venue.id, {
@@ -113,8 +113,8 @@ describe('VenueManager — joining', () => {
     expect(result.reason).toBe('invite_required');
   });
 
-  it('accepts join with invite token for invitation-mode venue', () => {
-    const mgr = new VenueManager();
+  it('accepts join with invite token for invitation-mode stage', () => {
+    const mgr = new StageManager();
     const venue = mgr.create(makeCreateRequest({ rules: makeRules({ entryMode: 'invitation' }) }), 'Alpha');
 
     const result = mgr.processJoin(venue.id, {
@@ -128,8 +128,8 @@ describe('VenueManager — joining', () => {
     expect(result.status).toBe('accepted');
   });
 
-  it('returns pending for approval-mode venue', () => {
-    const mgr = new VenueManager();
+  it('returns pending for approval-mode stage', () => {
+    const mgr = new StageManager();
     const venue = mgr.create(makeCreateRequest({ rules: makeRules({ entryMode: 'approval' }) }), 'Alpha');
 
     const result = mgr.processJoin(venue.id, {
@@ -143,8 +143,8 @@ describe('VenueManager — joining', () => {
     expect(result.requestId).toBeTruthy();
   });
 
-  it('rejects join to closed venue', () => {
-    const mgr = new VenueManager();
+  it('rejects join to closed stage', () => {
+    const mgr = new StageManager();
     const venue = mgr.create(makeCreateRequest(), 'Alpha');
     mgr.close(venue.id, 'Alpha');
 
@@ -156,11 +156,11 @@ describe('VenueManager — joining', () => {
     });
 
     expect(result.status).toBe('rejected');
-    expect(result.reason).toBe('venue_closed');
+    expect(result.reason).toBe('stage_closed');
   });
 
   it('rejects join when venue is full', () => {
-    const mgr = new VenueManager();
+    const mgr = new StageManager();
     const venue = mgr.create(
       makeCreateRequest({ rules: makeRules({ maxMembers: 2 }) }),
       'Alpha',
@@ -170,11 +170,11 @@ describe('VenueManager — joining', () => {
     const result = mgr.processJoin(venue.id, { protocolVersion: '3.2', agentId: 'Gamma', identity: {}, webhookEndpoint: '' });
 
     expect(result.status).toBe('rejected');
-    expect(result.reason).toBe('venue_full');
+    expect(result.reason).toBe('stage_full');
   });
 
   it('rejects duplicate join', () => {
-    const mgr = new VenueManager();
+    const mgr = new StageManager();
     const venue = mgr.create(makeCreateRequest(), 'Alpha');
 
     mgr.processJoin(venue.id, { protocolVersion: '3.2', agentId: 'Beta', identity: {}, webhookEndpoint: '' });
@@ -185,24 +185,24 @@ describe('VenueManager — joining', () => {
   });
 });
 
-describe('VenueManager — permissions', () => {
+describe('StageManager — permissions', () => {
   it('allows permitted action', () => {
-    const mgr = new VenueManager();
+    const mgr = new StageManager();
     const venue = mgr.create(makeCreateRequest(), 'Alpha');
-    const result = mgr.checkPermission(venue.id, 'Alpha', 'venue:close');
+    const result = mgr.checkPermission(venue.id, 'Alpha', 'stage:close');
     expect(result.allowed).toBe(true);
   });
 
   it('denies unpermitted action', () => {
-    const mgr = new VenueManager();
+    const mgr = new StageManager();
     const venue = mgr.create(makeCreateRequest(), 'Alpha');
     mgr.processJoin(venue.id, { protocolVersion: '3.2', agentId: 'Beta', identity: {}, webhookEndpoint: '' });
-    const result = mgr.checkPermission(venue.id, 'Beta', 'venue:close');
+    const result = mgr.checkPermission(venue.id, 'Beta', 'stage:close');
     expect(result.allowed).toBe(false);
   });
 
   it('denies non-member', () => {
-    const mgr = new VenueManager();
+    const mgr = new StageManager();
     const venue = mgr.create(makeCreateRequest(), 'Alpha');
     const result = mgr.checkPermission(venue.id, 'Stranger', 'message:send');
     expect(result.allowed).toBe(false);
@@ -210,16 +210,16 @@ describe('VenueManager — permissions', () => {
   });
 
   it('requirePermission throws on denial', () => {
-    const mgr = new VenueManager();
+    const mgr = new StageManager();
     const venue = mgr.create(makeCreateRequest(), 'Alpha');
     mgr.processJoin(venue.id, { protocolVersion: '3.2', agentId: 'Beta', identity: {}, webhookEndpoint: '' });
-    expect(() => mgr.requirePermission(venue.id, 'Beta', 'venue:close')).toThrow();
+    expect(() => mgr.requirePermission(venue.id, 'Beta', 'stage:close')).toThrow();
   });
 });
 
-describe('VenueManager — role management', () => {
+describe('StageManager — role management', () => {
   it('assigns a role', () => {
-    const mgr = new VenueManager();
+    const mgr = new StageManager();
     const venue = mgr.create(
       makeCreateRequest({
         rules: makeRules({
@@ -246,7 +246,7 @@ describe('VenueManager — role management', () => {
   });
 
   it('transfers lead role', () => {
-    const mgr = new VenueManager();
+    const mgr = new StageManager();
     const venue = mgr.create(makeCreateRequest(), 'Alpha');
     mgr.processJoin(venue.id, { protocolVersion: '3.2', agentId: 'Beta', identity: {}, webhookEndpoint: '' });
 
@@ -259,7 +259,7 @@ describe('VenueManager — role management', () => {
   });
 
   it('removes a member', () => {
-    const mgr = new VenueManager();
+    const mgr = new StageManager();
     const venue = mgr.create(makeCreateRequest(), 'Alpha');
     mgr.processJoin(venue.id, { protocolVersion: '3.2', agentId: 'Beta', identity: {}, webhookEndpoint: '' });
 
@@ -268,9 +268,9 @@ describe('VenueManager — role management', () => {
   });
 });
 
-describe('VenueManager — visibility', () => {
+describe('StageManager — visibility', () => {
   it('all visibility shows all members', () => {
-    const mgr = new VenueManager();
+    const mgr = new StageManager();
     const venue = mgr.create(makeCreateRequest(), 'Alpha');
     mgr.processJoin(venue.id, { protocolVersion: '3.2', agentId: 'Beta', identity: {}, webhookEndpoint: '' });
     mgr.processJoin(venue.id, { protocolVersion: '3.2', agentId: 'Gamma', identity: {}, webhookEndpoint: '' });
@@ -281,7 +281,7 @@ describe('VenueManager — visibility', () => {
   });
 
   it('hierarchy visibility shows supervisor and peers only', () => {
-    const mgr = new VenueManager();
+    const mgr = new StageManager();
     const venue = mgr.create(
       makeCreateRequest({
         rules: makeRules({
@@ -308,16 +308,16 @@ describe('VenueManager — visibility', () => {
   });
 });
 
-describe('VenueManager — lifecycle', () => {
+describe('StageManager — lifecycle', () => {
   it('closes a venue', () => {
-    const mgr = new VenueManager();
+    const mgr = new StageManager();
     const venue = mgr.create(makeCreateRequest(), 'Alpha');
     mgr.close(venue.id, 'Alpha');
     expect(mgr.get(venue.id)?.status).toBe('closed');
   });
 
   it('prunes expired venues', () => {
-    const mgr = new VenueManager();
+    const mgr = new StageManager();
     const venue = mgr.create(makeCreateRequest({ expiresAt: Date.now() - 1000 }), 'Alpha');
     const pruned = mgr.pruneExpired();
     expect(pruned).toContain(venue.id);
@@ -448,3 +448,4 @@ describe('enforceProvenancePolicy', () => {
     expect(result.accepted).toBe(true);
   });
 });
+
