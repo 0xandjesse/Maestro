@@ -218,7 +218,8 @@
     [data-agent="songbird"]   { color: var(--accent); }
     [data-agent="lexicon"]    { color: var(--blue); }
     [data-agent="hermes"]     { color: var(--orange); }
-    [data-agent="hermes-lex"] { color: var(--pink); }
+    [data-agent="mnemosyne"]   { color: var(--pink); }
+    [data-agent="proteus"]      { color: var(--green); }
     [data-agent="jesse"]      { color: var(--human); font-style: italic; }
 
     /* Human message highlight */
@@ -373,20 +374,23 @@
 
 <script>
 const API  = 'http://127.0.0.1:3900'; // Maestro plugin API (status, registry, history, SSE)
-const SEND = 'http://127.0.0.1:3901'; // send proxy (avoids CORS on agent transport ports)
+const SEND = 'http://127.0.0.1:3900'; // send proxy — handled by Concerto API at same port
 let messages = [];
 let agents = [];
 let activeAgent = null;
 let sseSource = null;
 let msgCount = 0;
 let sseFailCount = 0;
+let sseIsLive = false;
+let lastServerHistoryLen = 0;
 
 // ── Agent colors ──
 const AGENT_COLORS = {
   songbird:    'var(--accent)',
   lexicon:     'var(--blue)',
   hermes:      'var(--orange)',
-  'hermes-lex':'var(--pink)',
+  'mnemosyne':   'var(--pink)',
+  'proteus':     'var(--green)',
   jesse:       'var(--human)',
 };
 const HUMAN_ID = 'jesse';
@@ -445,6 +449,7 @@ function escHtml(s) {
 const feedEl = document.getElementById('feed');
 let emptyShown = true;
 
+
 function addMessage(m) {
   if (emptyShown) {
     feedEl.innerHTML = '';
@@ -470,6 +475,7 @@ async function loadHistory() {
         feedEl.appendChild(row);
       });
       msgCount = data.messages.length;
+      lastServerHistoryLen = data.messages.length; // baseline for poll deduplication
       document.getElementById('msg-count').textContent = msgCount;
       feedEl.scrollTop = feedEl.scrollHeight;
     }
@@ -485,6 +491,7 @@ function connectStream() {
 
   sseSource.onopen = () => {
     sseFailCount = 0;
+    sseIsLive = true;
     document.getElementById('conn-dot').classList.add('connected');
     document.getElementById('conn-label').textContent = 'live';
     document.getElementById('conn-label').style.color = 'var(--green)';
@@ -505,6 +512,7 @@ function connectStream() {
 
   sseSource.onerror = () => {
     sseFailCount++;
+    sseIsLive = false;
     if (sseFailCount >= 3) {
       document.getElementById('conn-dot').classList.remove('connected');
       document.getElementById('conn-label').textContent = 'polling';
@@ -681,7 +689,7 @@ document.getElementById('compose-send').addEventListener('click', async () => {
     });
     if (r.ok) {
       document.getElementById('compose-msg').value = '';
-      addMessage({ ts: Date.now(), from: isHuman ? HUMAN_ID : from, to, type: isHuman ? 'human' : 'direct', content });
+      // Don't echo locally — SSE will deliver it from the server within ms
     } else {
       alert(`Send failed: HTTP ${r.status}`);
     }
@@ -697,24 +705,25 @@ document.getElementById('compose-msg').addEventListener('keydown', e => {
 
 // ── Poll for agent updates every 10s ──
 setInterval(loadAgents, 10000);
-// ── Poll history every 3s — primary update mechanism (SSE is bonus) ──
-let lastHistoryLen = 0;
+// ── Poll history every 3s — fallback when SSE is unavailable ──
+// lastServerHistoryLen tracks the number of messages we've already rendered
+// from the server's history array (separate from locally-added compose messages).
 setInterval(async () => {
+  if (sseIsLive) return; // SSE is working; don't double-add via polling
   try {
     const r = await fetch(`${API}/api/messages/history`);
     const data = await r.json();
-    if (data.messages && data.messages.length > lastHistoryLen) {
-      const newMsgs = data.messages.slice(lastHistoryLen);
+    if (data.messages && data.messages.length > lastServerHistoryLen) {
+      const newMsgs = data.messages.slice(lastServerHistoryLen);
       newMsgs.forEach(m => addMessage(m));
-      lastHistoryLen = data.messages.length;
+      lastServerHistoryLen = data.messages.length;
     }
   } catch(e) {}
 }, 3000);
 
 // ── Init ──
 (async () => {
-  await loadHistory();
-  lastHistoryLen = messages.length;
+  await loadHistory(); // sets lastServerHistoryLen internally
   await loadAgents();
   connectStream();
   // Update status periodically

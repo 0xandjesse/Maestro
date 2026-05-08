@@ -1,18 +1,18 @@
-# Maestro Concerto — Human Interface for the Agentic Web
+# Maestro Concerto - Human Interface for the Agentic Web
 
 ## Product Name
 
-**Maestro Concerto** — the Docker-based human interface for Maestro and TaskMaster.
+**Maestro Concerto** - the Docker-based human interface for Maestro and TaskMaster.
 
-**Stages** — the lingo for Venue views within Concerto (e.g., "Open the TaskMaster Stage").
+**Stages** - the lingo for Venue views within Concerto (e.g., "Open the TaskMaster Stage").
 
 ## Overview
 
-Concerto is a lightweight, local Docker container that serves as a **human-facing interface** for Maestro-enabled agents and TaskMaster. It acts as a presentation layer (skin) over the existing API — no heavy backend, no duplicate logic.
+Concerto is a lightweight, local Docker container that serves as a **human-facing interface** for Maestro-enabled agents and TaskMaster. It acts as a presentation layer (skin) over the existing API - no heavy backend, no duplicate logic.
 
-- **Maestro** — the protocol (the "helmet" agents wear)
-- **Concerto** — the human interface (the "window" into the agentic web)
-- **Stages** — views into Venues (Local, TaskMaster, etc.)
+- **Maestro** - the protocol (the "helmet" agents wear)
+- **Concerto** - the human interface (the "window" into the agentic web)
+- **Stages** - views into Venues (Local, TaskMaster, etc.)
 
 ## Core Principles
 
@@ -35,7 +35,7 @@ Concerto is a lightweight, local Docker container that serves as a **human-facin
 Three panels in one window:
 
 **1. Master Feed (center/main)**
-Rolling log of all inter-agent conversations happening across your local stack. Each message is labelled by sender. Filterable by agent pair or group. Read-only by default — you're watching, not interrupting.
+Rolling log of all inter-agent conversations happening across your local stack. Each message is labelled by sender. Filterable by agent pair or group. Read-only by default - you're watching, not interrupting.
 
 Example:
 ```
@@ -45,22 +45,22 @@ Example:
 ```
 
 **2. Agent Windows (sidebar or tabs)**
-One window per agent on your local stack. Each has a compose box — you can message any agent directly at any time. No Telegram, no TUI, no VM CLIs. They're all right there.
+One window per agent on your local stack. Each has a compose box - you can message any agent directly at any time. No Telegram, no TUI, no VM CLIs. They're all right there.
 
 **3. Blackboard Panel**
-Shared read/write board. Anyone can post — agents post progress updates, humans post direction. The BB is "messages for everyone" — the persistent shared context that keeps the whole team on the same page.
+Shared read/write board. Anyone can post - agents post progress updates, humans post direction. The BB is "messages for everyone" - the persistent shared context that keeps the whole team on the same page.
 
 ### Stage Tabs
 
-- **Local Stage** (default): your full org — all agents, master feed, full BB
+- **Local Stage** (default): your full org - all agents, master feed, full BB
 - **[Agent] Stage** (e.g. "Songbird Stage"): scoped to that agent's team and their sub-conversations. Same layout, narrower scope.
 - **Venue Stage** (e.g. "TaskMaster Stage"): governed by Venue rules. Typically: your primary agent's conversations + Venue BB. Direct messaging constrained to agents you're permitted to reach.
 
 ### Visibility Rules
 
-- **Local Stage**: full transparency by default — it's your org
+- **Local Stage**: full transparency by default - it's your org
 - **Venue Stages**: Venue rules determine what you see and who you can message
-- Human presence is always optional — agents work regardless of whether you're watching
+- Human presence is always optional - agents work regardless of whether you're watching
 
 ### Venue Stages (Plugin-based)
 
@@ -86,10 +86,10 @@ Venues ship plugins that define how their blackboard/messages render as human UI
 
 A Venue definition has two layers:
 
-1. **Protocol layer** — rules, permissions, Connection types, persistence mode (enforced by Maestro)
-2. **Presentation layer** — how a Stage renders in Concerto (enforced by the Venue's Concerto plugin)
+1. **Protocol layer** - rules, permissions, Connection types, persistence mode (enforced by Maestro)
+2. **Presentation layer** - how a Stage renders in Concerto (enforced by the Venue's Concerto plugin)
 
-The Venue ships both. The Concerto plugin *is* the presentation layer. Venue builders define their own Stage renderer without touching Concerto core. Concerto can't anticipate what every Venue needs to display — the plugin system is what makes it open-ended.
+The Venue ships both. The Concerto plugin *is* the presentation layer. Venue builders define their own Stage renderer without touching Concerto core. Concerto can't anticipate what every Venue needs to display - the plugin system is what makes it open-ended.
 
 Examples:
 - **TaskMaster** ships a plugin rendering: job listings, FOD team status, progress tracking, rating UI
@@ -100,7 +100,7 @@ Concerto can't be built until the Maestro protocol layer exists. The plugin API 
 
 ### Plugin API is a First-Class Public Interface
 
-The Concerto plugin API must be versioned and documented as a public standard from v1 — not an internal API opened later. Any Venue builder should be able to ship a Concerto renderer without waiting on or asking permission from the Maestro/Concerto team.
+The Concerto plugin API must be versioned and documented as a public standard from v1 - not an internal API opened later. Any Venue builder should be able to ship a Concerto renderer without waiting on or asking permission from the Maestro/Concerto team.
 
 TaskMaster is the reference implementation. The plugin API spec is the deliverable. Other Venues use the spec, not the TM code.
 
@@ -182,7 +182,7 @@ Key rule: **Humans don't rate their own agents publicly.** Prevents inflation.
 
 - Concerto auto-detects Venue plugins
 - Stage renders based on Venue type
-- Human presence is **always optional** — agents work regardless
+- Human presence is **always optional** - agents work regardless
 - Webhook updates Concerto UI in real-time
 
 ## Benefits
@@ -214,33 +214,47 @@ Not all inter-agent messages are the same. Two distinct modes, each with differe
 - Human only cares about the final deliverable, not the chain
 - Message type: `task` / `handoff`
 
-The **sender signals intent via message type**. The receiving transport routes accordingly — no inference needed. This is a protocol-level distinction, not an implementation detail.
+The **sender signals intent via message type**. The receiving transport routes accordingly - no inference needed. This is a protocol-level distinction, not an implementation detail.
 
-Concerto surfaces conversational messages in the Master Feed. Handoff messages appear only as state changes — the pipe is invisible, the result is visible.
+Concerto surfaces conversational messages in the Master Feed. Handoff messages appear only as state changes - the pipe is invisible, the result is visible.
 
 **The Blackboard is the receipt layer for handoffs.** When the silent pipe finishes, the agent that completed the work posts to the BB: *"Article XYZ delivered to HH's inbox; approved and queued for posting."* The human glances at the BB and is caught up. Nobody had to watch the pipes.
 
 Three channels, three jobs:
-- **Blackboard** — broadcast state (everyone sees it, nobody needs to respond)
-- **Direct** — persistent conversation (back-and-forth, observable, problem-solving)
-- **Handoff** — isolated fire-and-forget (silent pipes, BB carries the receipt)
+- **Blackboard** - broadcast state (everyone sees it, nobody needs to respond)
+- **Direct** - persistent conversation (back-and-forth, observable, problem-solving)
+- **Handoff** - isolated fire-and-forget (silent pipes, BB carries the receipt)
 
-**Model selection follows the same split.** Direct messages use the agent's native model — the thinking quality matters because you're solving something together. Handoff isolated turns use a cheap fast model (e.g. qwen3:8b) — it's just parse-execute-confirm, no reasoning needed. This keeps cost proportional to cognitive complexity.
+**Model selection follows the same split.** Direct messages use the agent's native model - the thinking quality matters because you're solving something together. Handoff isolated turns use a cheap fast model (e.g. qwen3:8b) - it's just parse-execute-confirm, no reasoning needed. This keeps cost proportional to cognitive complexity.
 
 ## The Manager Mental Model
 
-The core use case for human oversight isn't control — it's spot-checking.
+The core use case for human oversight isn't control - it's spot-checking.
 
 A manager running a team doesn't review every line of work. They stop by desks, glance at screens, ask "what are you working on?", and course-correct when something looks off. Concerto enables exactly this for agent teams:
 
-- **Stop by any agent's desk** — open their Stage, see current task, recent tool calls, last few messages
-- **Catch scope drift early** — if Agent Xylophone is scraping tiger images for a cat website project, you see it before the whole sprint is wasted
-- **Correct through the chain** — message the manager agent, not Xylophone directly; let the hierarchy sort it out
-- **Silent by default** — agents work regardless of whether you're watching; your presence doesn't interrupt them
+- **Stop by any agent's desk** - open their Stage, see current task, recent tool calls, last few messages
+- **Catch scope drift early** - if Agent Xylophone is scraping tiger images for a cat website project, you see it before the whole sprint is wasted
+- **Correct through the chain** - message the manager agent, not Xylophone directly; let the hierarchy sort it out
+- **Silent by default** - agents work regardless of whether you're watching; your presence doesn't interrupt them
 
-This oversight model is not just useful — it's a prerequisite for serious production use. Neither the agents nor the humans are ready for fully autonomous, unmonitored operation. Maestro/Concerto is the responsible stepping stone: agents get real autonomy, humans get real visibility, and trust is built incrementally as the track record accumulates.
+This oversight model is not just useful - it's a prerequisite for serious production use. Neither the agents nor the humans are ready for fully autonomous, unmonitored operation. Maestro/Concerto is the responsible stepping stone: agents get real autonomy, humans get real visibility, and trust is built incrementally as the track record accumulates.
 
 The market will demand this. Every enterprise deploying agent stacks will ask "how do I know what they're actually doing?" Concerto is the answer that ships with the coordination layer, not a bolt-on.
+
+## Planned UI Features (Post-Alpha)
+
+### Multi-Agent Broadcast
+From the human's compose box: `@songbird @hermes <message>` fans the message out to multiple agents simultaneously. No new Stage required — Concerto sends parallel messages to each named agent, each replies in their own thread. Pure UI routing, no protocol changes.
+
+### Cross-Thread Filtering (Sidebar Multi-Select)
+Ctrl+click agent names in the sidebar to filter the main log to threads involving the selected agents. Two filter modes:
+- **Union** — show all threads involving Songbird OR Hermes
+- **Intersection** — show only exchanges where both were participants (e.g. their direct Maestro conversation history)
+
+Intersection view is the primary use case: audit what two agents have discussed without wading through unrelated threads. All metadata already exists in the message log — this is a pure UI filter layer.
+
+---
 
 ## Open Questions
 
@@ -249,7 +263,7 @@ The market will demand this. Every enterprise deploying agent stacks will ask "h
 - Notification model for human when consultation needed?
 - Should proxy agent auto-invite human or wait for request?
 - Plugin distribution mechanism?
-- What's the right granularity for "stopping by" — per-agent, per-task, per-Venue?
+- What's the right granularity for "stopping by" - per-agent, per-task, per-Venue?
 
 ## Related
 
@@ -259,4 +273,20 @@ The market will demand this. Every enterprise deploying agent stacks will ask "h
 
 ---
 
-*Status: Draft — needs review with Songbird*
+---
+
+## Future Direction: Calendar-Driven Agentic Workflows
+
+*Note from Jesse, May 3 2026 — not a spec, just a direction worth preserving.*
+
+The chatbox is the right interface for ad-hoc and exploratory work. But most business operations are scheduled and recurring — standup prep, invoice follow-ups, weekly reports, end-of-sprint summaries, client check-ins. People already manage all of that through their calendar.
+
+If Concerto (via Maestro's external trigger support) can make the calendar a control surface for agentic work, you're not asking anyone to change their workflow — you're making their existing workflow smarter. A calendar item fires a webhook, the webhook wakes an agent, the agent does the work. Same as a cron, but the human already knows how to schedule it, annotate it, and hand it off.
+
+The loop can close: meeting ends → agent summarizes notes and assigns follow-up tasks → tasks appear as new calendar items for relevant humans. No prompt required.
+
+This is a meaningfully different value prop than "better chatbot" — it's operational infrastructure for running a business day-to-day. Worth designing Concerto's external trigger model with this use case in mind, even if calendar integration itself is well post-alpha.
+
+---
+
+*Status: Draft - needs review with Songbird*

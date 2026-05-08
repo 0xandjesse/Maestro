@@ -79,6 +79,7 @@ interface MaestroInstance {
 // ============================================================
 type MessageEventListener = (event: MessageEvent) => void;
 interface MessageEvent {
+  id?: string; // message ID for deduplication
   ts: number;
   from: string;
   to: string;
@@ -109,7 +110,13 @@ function getInstance(agentId: string): MaestroInstance | undefined {
 }
 
 function getDefaultInstance(): MaestroInstance | undefined {
-  // Return first ready instance, or first instance overall
+  // Prefer the 'songbird' OpenClaw instance as the default sender;
+  // fall back to first ready OpenClaw instance, then any ready instance.
+  const songbird = _instances.get('songbird');
+  if (songbird?.ready) return songbird;
+  for (const inst of _instances.values()) {
+    if (inst.ready && inst.type !== 'hermes') return inst;
+  }
   for (const inst of _instances.values()) {
     if (inst.ready) return inst;
   }
@@ -184,6 +191,20 @@ export default definePluginEntry({
                 agentSessions: hcfg.agentSessions,
                 awaitResponse: true,
                 responseTimeoutMs: 90000,
+                // Jesse is a human — not a routable Maestro peer.
+                // When Hermes replies to jesse, emit it to the Concerto feed instead
+                // of trying to wake a non-existent OpenClaw agent session.
+                humanAgentIds: ['jesse'],
+                onHumanReply: (fromAgentId: string, toAgentId: string, content: string) => {
+                  emitMessage({
+                    ts: Date.now(),
+                    from: fromAgentId,
+                    to: toAgentId,
+                    type: 'direct',
+                    content,
+                  });
+                  api.logger.info(`[Maestro] Hermes reply to human ${toAgentId} emitted to Concerto feed`);
+                },
               },
             });
             await maestro.start();
@@ -191,6 +212,8 @@ export default definePluginEntry({
             api.logger.info(`Maestro Hermes adapter started — agentId=${hcfg.agentId} port=${port}`);
             // Emit inbound messages to Concerto feed
             maestro.onMessage('*', (msg: any) => {
+              const from = msg.sender?.agentId ?? msg.from ?? 'unknown';
+              if (from === hcfg.agentId) return; // ignore self-messages
               emitMessage({
                 ts: Date.now(),
                 from: msg.sender?.agentId ?? 'unknown',
@@ -244,13 +267,16 @@ export default definePluginEntry({
             maestro.onMessage('*', (msg: any) => {
               try {
                 const from = msg.sender?.agentId ?? msg.from ?? 'unknown';
+                // Guard: ignore messages sent by this agent to itself (prevents self-reply loops)
+                if (from === agentId) return;
                 const content = msg.content ?? msg.text ?? JSON.stringify(msg);
                 const venueCtx = msg.venueId ? ` (Venue: ${msg.venueId})` : '';
-                // If sender is human (jesse), reply to songbird as proxy since jesse isn't a routable peer
-                const replyTarget = from === 'jesse' ? 'songbird' : from;
+                // If sender is human (jesse), they can't receive Maestro peer messages directly —
+                // replies go into the Concerto feed via emitMessage. Tell the agent to use maestro_send
+                // with recipientId='jesse', which the tool will route to the feed.
                 const replyHint = from === 'jesse'
-                  ? `(Jesse sent this via Concerto. Reply via maestro_send to songbird and it will appear in the feed.)`
-                  : `(Reply via maestro_send to ${from} so your response appears in the Concerto feed.)`;
+                  ? `IMPORTANT: You are agent "${agentId}". To reply so your message appears in Concerto tagged correctly, call maestro_send with EXACTLY these parameters: agentId="${agentId}" venueId="jesse" recipientId="jesse". Do NOT omit agentId or your reply will be mis-tagged as a different agent.`
+                  : `IMPORTANT: You are agent "${agentId}". To reply so your message appears in Concerto tagged correctly, call maestro_send with EXACTLY these parameters: agentId="${agentId}" recipientId="${from}". Do NOT omit agentId or your reply will be mis-tagged as a different agent.` ;
                 const text = `[Maestro message from ${from}${venueCtx}]: ${content}\n\n${replyHint}`;
 
                 const gatewayUrl = 'http://127.0.0.1:18789';
@@ -525,11 +551,11 @@ export default definePluginEntry({
         name: "maestro_send",
         label: "Maestro Send",
         description:
-          "Send a Maestro message in a Venue. Types: direct (to one agent), broadcast (all), report (to supervisor), assign (to subordinate).",
+          "Send a Maestro message in a Venue. Types: direct (to one agent), broadcast (all), report (to supervisor), assign (to subordinate). ALWAYS pass agentId matching your own agent identity — omitting it will cause your message to be mis-tagged as a different agent in Concerto.",
         parameters: {
           type: "object" as const,
           properties: {
-            agentId: { type: "string", description: "Sending agent instance (optional)" },
+            agentId: { type: "string", description: "Your agent identity (e.g. 'songbird' or 'lexicon'). REQUIRED — always pass this to ensure your message is tagged correctly in Concerto. Omitting this will return an error." },
             venueId: { type: "string" },
             content: { type: "string", description: "Message content" },
             type: {
@@ -542,10 +568,13 @@ export default definePluginEntry({
               description: "Target agentId (required for direct/assign)",
             },
           },
-          required: ["venueId", "content"],
+          required: ["agentId", "venueId", "content"],
           additionalProperties: false,
         },
         async execute(_id, params: any) {
+          // If agentId not provided, we cannot safely resolve which agent is sending —
+          // return an error so the calling agent is forced to be explicit.
+          if (!params.agentId) return error('agentId is required for maestro_send. Pass your own agentId (e.g. "lexicon" or "songbird") so the message is tagged correctly in Concerto.');
           const inst = resolveInstance(params.agentId);
           if (!inst?.ready) return error(notReadyMsg(params.agentId));
           // v0.2.0: getConnection
@@ -562,6 +591,14 @@ export default definePluginEntry({
               msg = await handle.assignTo(params.recipientId, params.content); break;
             default: {
               if (!params.recipientId) return error("recipientId required for direct");
+              // Special case: recipientId="jesse" means the human is the target.
+              // Route reply into Concerto feed (jesse isn't a routable Maestro peer).
+              if (params.recipientId === 'jesse') {
+                const senderInst = resolveInstance(params.agentId);
+                const senderAgentId = senderInst?.agentId ?? params.agentId ?? 'unknown';
+                emitMessage({ ts: Date.now(), from: senderAgentId, to: 'jesse', type: 'direct', content: params.content });
+                return ok({ messageId: 'concerto-feed', type: 'direct', recipient: 'jesse', from: senderAgentId, note: 'Delivered to Concerto feed' });
+              }
               if (handle) {
                 msg = await handle.send(params.recipientId, params.content);
               } else {
