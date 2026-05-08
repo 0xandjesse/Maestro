@@ -298,6 +298,8 @@ export class Maestro {
           hermesAgentSessions: this.config.hermes?.agentSessions,
           hermesAwaitResponse: this.config.hermes?.awaitResponse,
           hermesResponseTimeoutMs: this.config.hermes?.responseTimeoutMs,
+          humanAgentIds: this.config.hermes?.humanAgentIds,
+          onHumanReply: this.config.hermes?.onHumanReply,
         },
         this.connectionManager,
       );

@@ -41,6 +41,17 @@ export interface HttpTransportConfig {
   hermesAwaitResponse?: boolean;
   /** Timeout ms for awaited Hermes responses */
   hermesResponseTimeoutMs?: number;
+  /**
+   * Agent IDs that are humans (not routable Maestro peers).
+   * When a Hermes reply targets one of these, onHumanReply is called
+   * instead of trying to wake an OpenClaw agent session.
+   */
+  humanAgentIds?: string[];
+  /**
+   * Called when Hermes replies to a human agent (non-routable peer).
+   * Use this to emit the reply to the Concerto feed or another display surface.
+   */
+  onHumanReply?: (fromAgentId: string, toAgentId: string, content: string) => void;
 }
 
 export class HttpTransport {
@@ -90,6 +101,12 @@ export class HttpTransport {
             version: '3.2',
           };
           console.log(`[HttpTransport] Hermes reply: ${reply.fromAgentId} → ${reply.toAgentId}: ${reply.output.slice(0, 80)}...`);
+          // If recipient is a human (non-routable), fire onHumanReply callback (e.g. emit to Concerto feed)
+          const isHuman = this.config.humanAgentIds?.includes(reply.toAgentId) ?? false;
+          if (isHuman && this.config.onHumanReply) {
+            this.config.onHumanReply(reply.fromAgentId, reply.toAgentId, reply.output);
+            return;
+          }
           // Use OpenClaw adapter to wake recipient directly — avoids self-POST loop
           if (this.openclawAdapter) {
             await this.openclawAdapter.wakeAgent(reply.toAgentId, replyMessage).catch((err: unknown) => {
@@ -231,8 +248,13 @@ export class HttpTransport {
             console.error('[HttpTransport] OpenClaw wake failed:', err);
           });
         }
-        // Wake Hermes agent session if adapter is configured
-        if (this.hermesAdapter) {
+        // Wake Hermes agent session if adapter is configured.
+        // Guard: only wake Hermes if THIS agent is the intended recipient.
+        // Waking on every inbound message (including replies Hermes just sent)
+        // causes an infinite self-reply loop.
+        const recipientIsUs = !message.recipient || message.recipient === this.agentId || message.recipient === '*';
+        const senderIsUs = message.sender?.agentId === this.agentId;
+        if (this.hermesAdapter && recipientIsUs && !senderIsUs) {
           this.hermesAdapter.wakeAgent(this.agentId, message).catch((err: unknown) => {
             console.error('[HttpTransport] Hermes wake failed:', err);
           });

@@ -130,11 +130,20 @@ export class HermesAdapter {
     onResponse?: (reply: HermesReply) => void | Promise<void>,
   ): Promise<void> {
     const result = await this.pollRunResult(runId);
+    const toAgentId = originalMessage.sender.agentId;
+
+    // Guard: never route a reply back to ourselves — this causes infinite loops.
+    // Hermes should only reply to external senders (songbird, lexicon, jesse, etc.)
+    if (toAgentId === agentId) {
+      console.warn(`[HermesAdapter] Dropping self-reply loop: ${agentId} → ${toAgentId}`);
+      return;
+    }
+
     if (result.ok && result.output && onResponse) {
       await onResponse({
         runId,
         fromAgentId: agentId,
-        toAgentId: originalMessage.sender.agentId,
+        toAgentId,
         output: result.output,
         originalMessage,
       });

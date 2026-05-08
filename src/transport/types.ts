@@ -120,6 +120,17 @@ export interface MaestroConfig {
     awaitResponse?: boolean;
     /** Timeout ms for awaited responses. Default: 30000 */
     responseTimeoutMs?: number;
+    /**
+     * Agent IDs that are humans (not routable Maestro peers).
+     * When Hermes replies to one of these, onHumanReply is called
+     * instead of waking an OpenClaw agent session.
+     */
+    humanAgentIds?: string[];
+    /**
+     * Called when Hermes completes a reply to a human (non-routable) agent.
+     * Use this to surface the reply in a UI (e.g. Concerto feed).
+     */
+    onHumanReply?: (fromAgentId: string, toAgentId: string, content: string) => void;
   };
 }
 

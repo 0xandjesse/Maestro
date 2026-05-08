@@ -1,7 +1,10 @@
 {
-  "agents": [
+  "agents": [],
+  "hermesAgents": [
     {
       "agentId": "songbird",
+      "apiUrl": "http://127.0.0.1:8642",
+      "apiKey": "maestro-local-dev",
       "transport": {
         "port": 3842,
         "registryPath": ".maestro/registry.json"
@@ -9,18 +12,14 @@
       "discovery": {
         "method": "mdns"
       },
-      "openclaw": {
-        "gatewayUrl": "http://127.0.0.1:18789",
-        "hookToken": "06fe84970c2ba322f6e59e007145f015f862be85e72823265fad2b3b8ced1069",
-        "handoffModel": "ollama/kimi-k2.5:cloud",
-        "agentSessions": {
-          "songbird": "agent:songbird:main",
-          "lexicon": "agent:lexicon:telegram:direct:8244638936"
-        }
+      "agentSessions": {
+        "songbird": "songbird"
       }
     },
     {
       "agentId": "lexicon",
+      "apiUrl": "http://127.0.0.1:8644",
+      "apiKey": "maestro-local-dev",
       "transport": {
         "port": 3843,
         "registryPath": ".maestro/registry.json"
@@ -28,24 +27,53 @@
       "discovery": {
         "method": "mdns"
       },
-      "openclaw": {
-        "gatewayUrl": "http://127.0.0.1:18789",
-        "hookToken": "06fe84970c2ba322f6e59e007145f015f862be85e72823265fad2b3b8ced1069",
-        "handoffModel": "ollama/kimi-k2.5:cloud",
-        "agentSessions": {
-          "songbird": "agent:songbird:main",
-          "lexicon": "agent:lexicon:telegram:direct:8244638936"
-        }
+      "agentSessions": {
+        "lexicon": "lexicon"
       }
-    }
-  ],
-  "hermesAgents": [
+    },
     {
       "agentId": "hermes",
       "apiUrl": "http://127.0.0.1:8642",
+      "transport": {
+        "port": 3844,
+        "registryPath": ".maestro/registry.json"
+      },
+      "discovery": {
+        "method": "mdns"
+      },
       "apiKey": "maestro-local-dev",
       "agentSessions": {
-        "hermes": "maestro"
+        "hermes": "hermes"
+      }
+    },
+    {
+      "agentId": "mnemosyne",
+      "apiUrl": "http://127.0.0.1:8642",
+      "apiKey": "maestro-local-dev",
+      "transport": {
+        "port": 3845,
+        "registryPath": ".maestro/registry.json"
+      },
+      "discovery": {
+        "method": "mdns"
+      },
+      "agentSessions": {
+        "mnemosyne": "mnemosyne"
+      }
+    },
+    {
+      "agentId": "proteus",
+      "apiUrl": "http://127.0.0.1:8642",
+      "apiKey": "maestro-local-dev",
+      "transport": {
+        "port": 3846,
+        "registryPath": ".maestro/registry.json"
+      },
+      "discovery": {
+        "method": "mdns"
+      },
+      "agentSessions": {
+        "proteus": "proteus"
       }
     }
   ]
