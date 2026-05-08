@@ -55,7 +55,8 @@ export { LocalKeyResolver } from './resolvers/LocalKeyResolver.js';
 
 // Blackboard
 export type { BlackboardEntry, BlackboardBackend, SharedBlackboard, Unsubscribe } from './blackboard/index.js';
-export { InMemoryBlackboard, SQLiteBlackboard, BlackboardBridge } from './blackboard/index.js';
+export { InMemoryBlackboard, SqliteBlackboard, SQLiteBlackboard, BlackboardBridge } from './blackboard/index.js';
+export type { SqliteBlackboardOptions } from './blackboard/index.js';
 
 // Transport
 export type { MaestroConfig, MessageHandler, EventHandler, SendOptions, Artifact, WebhookEvent, DiscoveryConfig, DiscoveryMethod, AgentRegistration } from './transport/types.js';
@@ -64,9 +65,15 @@ export { LocalRegistry } from './transport/LocalRegistry.js';
 export { HttpTransport } from './transport/HttpTransport.js';
 export type { HttpTransportConfig } from './transport/HttpTransport.js';
 export { NetworkDelivery, deliverMessage } from './transport/NetworkDelivery.js';
+export type { DeliveryResult } from './transport/NetworkDelivery.js';
 export { MdnsDiscovery } from './transport/MdnsDiscovery.js';
 export type { MdnsDiscoveryConfig } from './transport/MdnsDiscovery.js';
-export type { DeliveryResult } from './transport/NetworkDelivery.js';
+export { WebhookServer } from './transport/WebhookServer.js';
+export type { InboundHandler, WebhookServerOptions } from './transport/WebhookServer.js';
+export { NetworkTransport } from './transport/NetworkTransport.js';
+export type { NetworkTransportOptions } from './transport/NetworkTransport.js';
+export { MdnsRegistry } from './transport/MdnsRegistry.js';
+export type { MdnsRegistryOptions } from './transport/MdnsRegistry.js';
 export { OpenClawAdapter } from './plugin/OpenClawAdapter.js';
 export type { OpenClawAdapterConfig } from './plugin/OpenClawAdapter.js';
 export { ConnectionBroker } from './transport/ConnectionBroker.js';

@@ -140,3 +140,5 @@ export interface MaestroConfig {
 
 export type MessageHandler = (message: MaestroMessage) => void | Promise<void>;
 export type EventHandler<T = Record<string, unknown>> = (event: T) => void | Promise<void>;
+
+

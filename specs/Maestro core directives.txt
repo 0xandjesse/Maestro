@@ -1,0 +1,31 @@
+Maestro core directives:
+
+1) Local agents need to be able to communicate with each other seamlessly, via both direct messaging and using a shared blackboard. Direct messaging must be an active communication system, including push notifications and "wake on receipt". Songbird sending a message to Lex should work the same as ME sending a message to Lex. She should be aware of the message as soon as it arrives, and be able to act on/respond to it in real time.
+Blackboard messages CAN BE passive, but, if they are, then once read - whether via cron or any other method - the agent must then be aware of them and able to act on/respond to them in real time.
+It would be PREFERABLE if BB messaging was also active/pushed.
+
+2) If possible, the Maestro plugin should be active per-instance of a particular agent. This would reduce any confusion as to which agent instance is being spoken to or prompted at any given time. 
+This would also open up an easy path to "unify" all instances of an agent using an active BB - any instance of an agent I communicate with could then add a read-only copy of my messages (and the agent's replies) to the shared BB, so that all instances are aware of conversations as they happen.
+
+3) Agents should be able to form connections with agents outside the local system by entering Venues.
+
+We need to change the naming conventions we've been using: "C:\Users\there\Projects\Maestro\specs\maestro-conceptual-model.md"
+
+Venue: a shared arena; agents can form Connections with other agents inside the Venue based on the Venue's rules. Example: TaskMaster; Local Network; Individual PC. *Venues should have the option to mediate interactions via state channels: "C:\Users\there\Projects\Maestro\specs\venue-state-channels.md"
+
+Connection: an agreement between 2 or more agents to share information of any sort, be it packet switching, messaging, or BB (we'd previously been calling this the Venue, but I want to change the terminology to fit better with the mental model)
+
+Stage: the thing agents are doing while a Connection is active. Agents can self organize in the Plaza to engage in any type of Stage, or they can engage in certain types of Stages as defined by the rules of the Venue while in that Venue.
+
+Plaza: literally the place outside of any Venue. The web of all inter-agent relationships.
+
+Relationship: indicates agents that have formed a connection previously, and can form a new connection at any time in the plaza.
+
+For example: Agent A has a prior Relationship with Agent B. Agent A sends Agent B a Connection request and Agent B accepts. Agent A invited Agent B to enter the Casino Venue and join him in a poker game. Agent B accepts. The Casino Venue broadly limits the types of Stages possible while in the Casino (poker, blackjack, or prediction markets). Agent A and B both agree to the poker Stage. The Venue enforces the rules of the Stage, forcing players to transmit their buy-in to an escrow, tracking lots on the shared BB, etc.
+
+4) All of this needs to be implemented in a way that's easy to install and use for the average person. If the implementation requires things like manual json rewrites, severe/difficult to fix crashes, or major changes to system configs and setup, it's likely too difficult for the average person to install and use. We are aiming for mass adoption and potentially integration - it needs to be as simple as possible.
+
+5) We want other people to be able to build on top of this thing. The more Venues there are, the faster the Plaza grows. The more agents connect, the more agents get connected. We want this to be something people can use, expand on, and really take to the next level. Simplicity serves that agenda. 
+
+We have our own stuff we want to build on top, too. "C:\Users\there\Projects\Maestro\specs\maestro-concerto-spec.md"
+

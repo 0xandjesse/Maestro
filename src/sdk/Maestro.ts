@@ -633,4 +633,17 @@ export class Maestro {
   getBlackboard(connectionId: string): SharedBlackboard | undefined {
     return this.blackboards.get(connectionId);
   }
+
+  /**
+   * Replace this agent's blackboard for a Venue with an externally-provided one.
+   * Used for same-process joins to share a single blackboard instance across agents.
+   */
+  linkBlackboard(venueId: string, bb: SharedBlackboard): void {
+    this.blackboards.set(venueId, bb);
+    // Rebuild the handle with the shared BB
+    const hostManager = this._sharedManagers.get(venueId);
+    const handle = new VenueHandle(this, venueId, bb, hostManager);
+    this.venueHandles.set(venueId, handle);
+  }
 }
+
