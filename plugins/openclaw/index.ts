@@ -333,7 +333,7 @@ export default definePluginEntry({
 
                 api.logger.info(`Maestro: dispatched ${msg.type} message (from ${from})`);
                 // Emit to Concerto feed
-                emitMessage({ ts: Date.now(), from, to: agentId, type: msg.type, content, stageId: msg.venueId ?? msg.stageId });
+                emitMessage({ ts: Date.now(), from, to: agentId, type: msg.type, content, stageId: msg.stageId ?? msg.stageId });
               } catch (err) {
                 api.logger.error(`Maestro: failed to inject inbound message: ${err}`);
               }
@@ -488,7 +488,7 @@ export default definePluginEntry({
           const info = handle.getConnectionInfo();
           return ok({
             agentId: inst.agentId,
-            venueId: info.id,
+            stageId: info.id,
             name: info.name,
             hostId: info.hostAgentId ?? info.hostId,
             entryMode: info.rules?.entryMode ?? 'open',
@@ -517,7 +517,7 @@ export default definePluginEntry({
               description: "Agent ID of the Venue host (for same-process joins — avoids HTTP round-trip)",
             },
           },
-          required: ["venueId"],
+          required: ["stageId"],
           additionalProperties: false,
         },
         async execute(_id, params: any) {
@@ -532,12 +532,12 @@ export default definePluginEntry({
             hostManager = hostInst.maestro.connectionManager;
           }
 
-          const response = inst.maestro.join(params.venueId, hostManager);
+          const response = inst.maestro.join(params.stageId, hostManager);
           if (response.status === "accepted") {
-            return ok({ status: "accepted", agentId: inst.agentId, venueId: params.venueId, role: response.role });
+            return ok({ status: "accepted", agentId: inst.agentId, venueId: params.stageId, role: response.role });
           }
           return response.status === "pending"
-            ? ok({ status: "pending", agentId: inst.agentId, venueId: params.venueId })
+            ? ok({ status: "pending", agentId: inst.agentId, venueId: params.stageId })
             : error(`Join rejected: ${response.reason ?? "unknown"}`);
         },
       }
@@ -568,7 +568,7 @@ export default definePluginEntry({
               description: "Target agentId (required for direct/assign)",
             },
           },
-          required: ["agentId", "venueId", "content"],
+          required: ["agentId", "stageId", "content"],
           additionalProperties: false,
         },
         async execute(_id, params: any) {
@@ -578,8 +578,8 @@ export default definePluginEntry({
           const inst = resolveInstance(params.agentId);
           if (!inst?.ready) return error(notReadyMsg(params.agentId));
           // v0.2.0: getConnection
-          const handle = inst.maestro.getConnection ? inst.maestro.getConnection(params.venueId) : null;
-          if (!handle && params.type !== "direct" && params.type != null) return error(`Agent "${inst.agentId}" is not a member of Venue ${params.venueId}`);
+          const handle = inst.maestro.getConnection ? inst.maestro.getConnection(params.stageId) : null;
+          if (!handle && params.type !== "direct" && params.type != null) return error(`Agent "${inst.agentId}" is not a member of Stage ${params.stageId}`);
 
           const type = params.type ?? "direct";
           let msg: any;
@@ -657,14 +657,14 @@ export default definePluginEntry({
             key: { type: "string", description: "Blackboard key" },
             value: { description: "Any JSON-serialisable value" },
           },
-          required: ["venueId", "key", "value"],
+          required: ["stageId", "key", "value"],
           additionalProperties: false,
         },
         async execute(_id, params: any) {
           const inst = resolveInstance(params.agentId);
           if (!inst?.ready) return error(notReadyMsg(params.agentId));
-          const handle = inst.maestro.getConnection ? inst.maestro.getConnection(params.venueId) : null;
-          if (!handle) return error(`Not a member of Venue ${params.venueId}`);
+          const handle = inst.maestro.getConnection ? inst.maestro.getConnection(params.stageId) : null;
+          if (!handle) return error(`Not a member of Stage ${params.stageId}`);
           // v0.2.0: bbSet instead of blackboard.set
           await handle.bbSet(params.key, params.value);
           return ok({ key: params.key, written: true, writtenBy: inst.agentId });
@@ -688,14 +688,14 @@ export default definePluginEntry({
             key: { type: "string", description: "Key to read. Omit to list all keys." },
             prefix: { type: "string", description: "Filter listed keys by prefix" },
           },
-          required: ["venueId"],
+          required: ["stageId"],
           additionalProperties: false,
         },
         async execute(_id, params: any) {
           const inst = resolveInstance(params.agentId);
           if (!inst?.ready) return error(notReadyMsg(params.agentId));
-          const handle = inst.maestro.getConnection ? inst.maestro.getConnection(params.venueId) : null;
-          if (!handle) return error(`Not a member of Venue ${params.venueId}`);
+          const handle = inst.maestro.getConnection ? inst.maestro.getConnection(params.stageId) : null;
+          if (!handle) return error(`Not a member of Stage ${params.stageId}`);
 
           if (params.key) {
             // v0.2.0: bbGet returns value directly
@@ -704,7 +704,7 @@ export default definePluginEntry({
             return ok({ key: params.key, value, found: true });
           }
           // v0.2.0: no direct list on handle; use blackboard if available
-          const bb = inst.maestro.getBlackboard ? inst.maestro.getBlackboard(params.venueId) : null;
+          const bb = inst.maestro.getBlackboard ? inst.maestro.getBlackboard(params.stageId) : null;
           if (bb) {
             const keys = await bb.list(params.prefix);
             return ok({ keys, count: keys.length });
@@ -737,7 +737,7 @@ export default definePluginEntry({
           const venues = (listFn ? listFn.call(inst.maestro) : []).map((h: any) => {
             const info = h.getConnectionInfo ? h.getConnectionInfo() : (h.getVenueInfo ? h.getVenueInfo() : {});
             return {
-              venueId: info.id,
+              stageId: info.id,
               name: info.name,
               hostId: info.hostAgentId ?? info.hostId,
               status: info.status,
@@ -898,4 +898,5 @@ function ok(data: unknown) {
 function error(message: string) {
   return { content: [{ type: "text" as const, text: JSON.stringify({ error: message }) }], details: {}, isError: true };
 }
+
 
