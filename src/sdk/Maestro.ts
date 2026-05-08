@@ -26,7 +26,7 @@ import {
   ConnectionRules,
 } from '../connection/types.js';
 import { InMemoryBlackboard } from '../blackboard/InMemoryBlackboard.js';
-import { SQLiteBlackboard } from '../blackboard/SQLiteBlackboard.js';
+import { SqliteBlackboard } from '../blackboard/SqliteBlackboard.js';
 import { BlackboardBridge } from '../blackboard/BlackboardBridge.js';
 import { SharedBlackboard, BlackboardEntry, Unsubscribe } from '../blackboard/types.js';
 import { MessageRouter } from '../transport/MessageRouter.js';
@@ -608,7 +608,7 @@ export class Maestro {
       if (this.config.transport) {
         // Persistent SQLite blackboard for cross-process scenarios
         const dbPath = this.config.transport.dbPath ?? '.maestro/blackboard.db';
-        const sqliteBb = new SQLiteBlackboard(connectionId, dbPath);
+        const sqliteBb = new SqliteBlackboard({ path: dbPath });
         bb = sqliteBb;
         // Register with transport so incoming updates are applied
         if (this.httpTransport) {
@@ -638,12 +638,13 @@ export class Maestro {
    * Replace this agent's blackboard for a Venue with an externally-provided one.
    * Used for same-process joins to share a single blackboard instance across agents.
    */
-  linkBlackboard(venueId: string, bb: SharedBlackboard): void {
-    this.blackboards.set(venueId, bb);
+  linkBlackboard(connectionId: string, bb: SharedBlackboard): void {
+    this.blackboards.set(connectionId, bb);
     // Rebuild the handle with the shared BB
-    const hostManager = this._sharedManagers.get(venueId);
-    const handle = new VenueHandle(this, venueId, bb, hostManager);
-    this.venueHandles.set(venueId, handle);
+    const hostManager = this._sharedManagers.get(connectionId);
+    const handle = new ConnectionHandle(this, connectionId, bb, hostManager);
+    this.connectionHandles.set(connectionId, handle);
   }
 }
+
 

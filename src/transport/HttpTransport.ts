@@ -20,7 +20,7 @@ import { LocalRegistry } from './LocalRegistry.js';
 import { deliverMessage } from './NetworkDelivery.js';
 import { OpenClawAdapter, OpenClawAdapterConfig } from '../plugin/OpenClawAdapter.js';
 import { HermesAdapter } from '../plugin/HermesAdapter.js';
-import { SQLiteBlackboard } from '../blackboard/SQLiteBlackboard.js';
+import { SqliteBlackboard } from '../blackboard/SqliteBlackboard.js';
 import { BlackboardEntry } from '../blackboard/types.js';
 import { ConnectionManager } from '../connection/ConnectionManager.js';
 import { JoinRequest, ConnectionEvent } from '../connection/types.js';
@@ -60,7 +60,7 @@ export class HttpTransport {
   private startedAt: number | null = null;
   private openclawAdapter: OpenClawAdapter | null = null;
   private hermesAdapter: HermesAdapter | null = null;
-  private blackboards = new Map<string, SQLiteBlackboard>();
+  private blackboards = new Map<string, SqliteBlackboard>();
 
   constructor(
     private agentId: string,
@@ -167,7 +167,7 @@ export class HttpTransport {
    * Register a SQLiteBlackboard for a stage so incoming
    * blackboard:update messages can be applied locally.
    */
-  registerBlackboard(stageId: string, bb: SQLiteBlackboard): void {
+  registerBlackboard(stageId: string, bb: SqliteBlackboard): void {
     this.blackboards.set(stageId, bb);
   }
 
@@ -464,9 +464,12 @@ export class HttpTransport {
     };
 
     try {
-      bb.applyRemoteUpdate(entry);
+      // Apply remote update using standard set (last-write-wins by timestamp)
+      void bb.set(entry.key, entry.value, entry.writtenBy);
     } catch (err) {
       console.error('[HttpTransport] Failed to apply blackboard update:', err);
     }
   }
 }
+
+
