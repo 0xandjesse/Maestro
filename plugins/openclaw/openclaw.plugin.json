@@ -1,0 +1,73 @@
+{
+  "id": "maestro-protocol",
+  "name": "Maestro Protocol",
+  "description": "Open agent coordination protocol. Gives agents presence, shared blackboards, and structured venues for multi-agent collaboration.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "agents": {
+        "type": "array",
+        "description": "Multi-agent configuration. Each entry configures one Maestro instance.",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["agentId"],
+          "properties": {
+            "agentId": { "type": "string" },
+            "webhookPort": { "type": "number" },
+            "blackboardPath": { "type": "string" },
+            "discovery": { "type": "string", "enum": ["mdns", "file", "none"] },
+            "registryPath": { "type": "string" }
+          }
+        }
+      },
+      "agentId": {
+        "type": "string",
+        "description": "(Legacy) Single agent identity"
+      },
+      "webhookPort": {
+        "type": "number",
+        "description": "(Legacy) Single agent webhook port"
+      },
+      "blackboardPath": {
+        "type": "string",
+        "description": "Path to SQLite file for persistent blackboards (default: in-memory)"
+      },
+      "discovery": {
+        "type": "string",
+        "enum": ["mdns", "file", "none"],
+        "description": "Discovery method (default: mdns)"
+      },
+      "registryPath": {
+        "type": "string",
+        "description": "Path to file registry (required when discovery=file)"
+      },
+      "hermesAgents": {
+        "type": "array",
+        "description": "Hermes-Agent VM instances to give Maestro presence.",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["agentId", "apiUrl", "apiKey"],
+          "properties": {
+            "agentId": { "type": "string" },
+            "apiUrl": { "type": "string" },
+            "apiKey": { "type": "string" },
+            "transport": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "port": { "type": "number" }
+              }
+            },
+            "agentSessions": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
