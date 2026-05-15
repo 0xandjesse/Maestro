@@ -495,6 +495,10 @@ class MaestroTransport:
             log.info(f"System message from {sender}: acknowledged")
             return web.json_response({"accepted": True, "type": "system", "agentId": self.agent_id})
 
+        # Work log query (structural, no LLM)
+        if msg_type == "worklog:query":
+            return await self._handle_worklog_query_msg(message)
+
         # BB ops (structural, no LLM)
         if msg_type == "BB_WRITE":
             asyncio.create_task(self._process_bb_write(message))
@@ -762,6 +766,22 @@ class MaestroTransport:
             return logs[-limit:]
         except Exception:
             return []
+
+    async def _handle_worklog_query_msg(self, message: dict):
+        """Handle worklog:query Maestro message type.
+
+        Body: {agent_id?: str, limit?: int}
+        Returns: {ok, agent_id, count, entries}
+        """
+        agent_id = message.get("agent_id") or self.agent_id
+        limit = min(int(message.get("limit", 20)), 100)
+        entries = self._read_work_log(agent_id=agent_id, limit=limit)
+        return web.json_response({
+            "ok": True,
+            "agent_id": agent_id,
+            "count": len(entries),
+            "entries": entries,
+        })
 
     async def handle_worklog_query(self, req):
         """POST /maestro/worklog/query — body: {\"agent_id\": \"proteus\", \"limit\": 10}"""
