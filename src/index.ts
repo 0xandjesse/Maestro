@@ -62,6 +62,7 @@ export type { SqliteBlackboardOptions } from './blackboard/index.js';
 export type { MaestroConfig, MessageHandler, EventHandler, SendOptions, Artifact, WebhookEvent, DiscoveryConfig, DiscoveryMethod, AgentRegistration } from './transport/types.js';
 export { MessageRouter } from './transport/MessageRouter.js';
 export { LocalRegistry } from './transport/LocalRegistry.js';
+export { NonceSet } from './transport/NonceSet.js';
 export { WebhookServer } from './transport/WebhookServer.js';
 export type { InboundHandler, WebhookServerOptions } from './transport/WebhookServer.js';
 export { NetworkTransport } from './transport/NetworkTransport.js';

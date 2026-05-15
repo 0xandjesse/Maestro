@@ -25,7 +25,9 @@
   "dependencies": {
     "@noble/ed25519": "^2.1.0",
     "@noble/hashes": "^1.4.0",
+    "@types/express": "^5.0.6",
     "better-sqlite3": "^12.9.0",
+    "express": "^5.2.1",
     "multicast-dns": "^7.2.5"
   },
   "devDependencies": {

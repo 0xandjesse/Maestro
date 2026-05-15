@@ -265,6 +265,7 @@ export default definePluginEntry({
             //   other   → isolated turn (fire-and-forget) — handoff/task passing,
             //             dumb pipe, human only cares about the final deliverable
             maestro.onMessage('*', (msg: any) => {
+              api.logger.info(`Maestro: onMessage fired — type=${msg.type} from=${msg.sender?.agentId ?? 'unknown'}`);
               try {
                 const from = msg.sender?.agentId ?? msg.from ?? 'unknown';
                 // Guard: ignore messages sent by this agent to itself (prevents self-reply loops)
@@ -284,9 +285,9 @@ export default definePluginEntry({
                 const isDirect = msg.type === 'direct';
 
                 if (isDirect) {
-                  // Route to agent's main session so it has full context (SOUL.md, AGENTS.md, memory)
-                  // Isolated sessions boot cold with no personality — useless for conversational messages
-                  const sessionKey = `agent:${agentId}:main`;
+                  // Route to agent's last-active session — do NOT hardcode a session key.
+                  // agent:${agentId}:main doesn't exist when the agent is active on Telegram/Discord/etc.
+                  // Omitting sessionKey lets the hooks API resolve the correct active session automatically.
                   fetch(`${gatewayUrl}/hooks/agent`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${hookToken}` },
@@ -295,16 +296,16 @@ export default definePluginEntry({
                       agentId,
                       name: `Maestro from ${from}`,
                       wakeMode: 'now',
-                      sessionKey,
+                      // No sessionKey — OC resolves last-active session for this agent
                     }),
                     signal: AbortSignal.timeout(5000),
                   }).then(r => {
-                    if (r.ok) api.logger.info(`Maestro: routed direct message to main session for ${agentId} (from ${from})`);
+                    if (r.ok) api.logger.info(`Maestro: routed direct message to active session for ${agentId} (from ${from})`);
                     else api.logger.warn(`Maestro: hooks API rejected for direct message: ${r.status}`);
                   }).catch(e => {
                     api.logger.warn(`Maestro: hooks API failed for direct message (${e.message}), falling back to enqueue`);
-                    api.runtime.system.enqueueSystemEvent(text, { sessionKey });
-                    getHeartbeatFn().then(fn => fn({ sessionKey, reason: 'maestro:inbound' }));
+                    // Fallback: best-effort enqueue without a session key
+                    getHeartbeatFn().then(fn => fn({ reason: 'maestro:inbound' }));
                   });
                 } else {
                   // Handoff/task: isolated turn, fire-and-forget, cheap model
@@ -325,9 +326,7 @@ export default definePluginEntry({
                     else api.logger.warn(`Maestro: hooks API rejected for ${msg.type} message: ${r.status}`);
                   }).catch(e => {
                     api.logger.warn(`Maestro: hooks API failed for ${msg.type} message (${e.message}), falling back to enqueue`);
-                    const sessionKey = `agent:${agentId}:main`;
-                    api.runtime.system.enqueueSystemEvent(text, { sessionKey });
-                    getHeartbeatFn().then(fn => fn({ sessionKey, reason: 'maestro:inbound' }));
+                    getHeartbeatFn().then(fn => fn({ reason: 'maestro:inbound' }));
                   });
                 }
 

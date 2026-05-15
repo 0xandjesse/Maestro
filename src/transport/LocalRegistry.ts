@@ -81,7 +81,6 @@ export class LocalRegistry {
     try {
       const raw = readFileSync(this.filePath, 'utf8');
       const data: AgentRegistration[] = JSON.parse(raw);
-      this.cache.clear();
       for (const entry of data) {
         this.cache.set(entry.agentId, entry);
       }
@@ -93,6 +92,22 @@ export class LocalRegistry {
   private persist(): void {
     const dir = dirname(this.filePath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+    // Merge disk state before writing to avoid clobbering other processes
+    if (existsSync(this.filePath)) {
+      try {
+        const raw = readFileSync(this.filePath, 'utf8');
+        const data: AgentRegistration[] = JSON.parse(raw);
+        for (const entry of data) {
+          if (!this.cache.has(entry.agentId)) {
+            this.cache.set(entry.agentId, entry);
+          }
+        }
+      } catch {
+        // File corrupt — proceed with cache only
+      }
+    }
+
     const data = [...this.cache.values()];
     writeFileSync(this.filePath, JSON.stringify(data, null, 2), 'utf8');
   }

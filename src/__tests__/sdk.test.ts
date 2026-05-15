@@ -296,7 +296,7 @@ describe('Maestro SDK — provenance policy enforcement', () => {
       sender: { agentId: 'Beta' },
       recipient: 'Alpha',
       timestamp: Date.now(),
-      venueId: venue.stageId,
+      stageId: venue.stageId,
       version: '3.2',
     };
 
@@ -324,7 +324,7 @@ describe('Maestro SDK — provenance policy enforcement', () => {
       sender: { agentId: 'Beta' },
       recipient: 'Alpha',
       timestamp: Date.now(),
-      venueId: venue.stageId,
+      stageId: venue.stageId,
       version: '3.2',
       provenance: {
         mode: 'full',

@@ -129,6 +129,9 @@ export type MessageType =
   | 'presence'
   | 'stage:invitation'
   | 'stage:announcement'
+  | 'connection:invitation'
+  | 'connection:announcement'
+  | 'handoff'
   | 'custom';
 
 // ----------------------------------------------------------
@@ -161,8 +164,11 @@ export interface MaestroMessage {
    */
   provenance?: Provenance;
 
-  /** Optional Stage context */
+  /** Optional Stage/Connection context */
   stageId?: string;
+
+  /** Optional structured payload (for blackboard:update, connection:invitation, etc.) */
+  payload?: Record<string, unknown>;
 
   /** replyTo message ID for threading / backwards provenance */
   replyTo?: string;
