@@ -180,18 +180,32 @@ Each agent runs a local cron every 4 hours:
 4. POST memory_write to own transport endpoint
 ```
 
-### /work and /workall Commands
+### Commands
 
-Update gateway `handle_worklog_query` to read from BB (Tier 2), not raw work log.
+Canonical names are lowercase. Capitalization is normalized at dispatch (`/BB` = `/bb`).
+`/work` and `/workall` remain as aliases for backward compat.
 
-```
-/work          → BB entries for the calling agent's session
-/work proteus  → BB entries for Proteus (last 4h)
-/workall       → BB entries for all registered agents (last 4h)
-```
+| Command | Reads from | Output | Audience |
+|---------|-----------|--------|----------|
+| `/bb [agent]` | Tier 2 BB | Plain English, last 4h | Anyone |
+| `/bball` | Tier 2 BB (all agents) | Plain English, last 4h | Officers + Jesse |
+| `/log [agent]` | Tier 1 work log | Technical detail, full task | Self + supervisor + Jesse |
+| `/logall` | Tier 1 work log (all agents) | Technical detail, all tasks | Officers + Jesse only |
+| `/memory [agent]` | Tier 3 Task Memory | 4h narrative summary | Self + supervisor + Jesse |
+| `/memoryall` | Tier 3 Task Memory (all agents) | All summaries | Officers + Jesse only |
 
-Consider renaming to `/bb` and `/bball` — clearer semantics, avoids confusion with
-the technical work log. Keep `/work` as an alias for backward compat.
+**Intended workflow:**
+Jesse calls `/bball` → sees "Proteus fixed routing bug at 10:19pm" → pings Songbird →
+Songbird pulls `/log proteus` → reads root cause, explains in plain English.
+
+### Log Archival Schedule
+
+- **BB (Tier 2):** Time-scoped. Rolling 4h window, pruned on every write.
+- **Work log (Tier 1):** Task-scoped. Full log kept until task completion, then archived
+  to `~/.maestro/archive/<agent_id>/<task_id>/work_log.json`. Not split by time — the
+  full log for a task stays in one place.
+- **Task Memory (Tier 3):** Time-scoped writes (4h cron), task-scoped archival. All
+  memory snapshots for a task archived together at completion.
 
 ### Task Completion / Archival
 
@@ -200,6 +214,28 @@ When an agent marks a task complete:
 2. Archive Task Memory snapshots → same directory
 3. Clear active work log
 4. BB entries expire naturally (4h TTL)
+
+---
+
+## Security Model
+
+Access control is role-based. Enforced at the transport layer via `sender.agentId`
+checked against a role map in config. Not cryptographically enforced until wallet-based
+identity lands in Phase 3 — for now it's trust-based, appropriate for local deployments.
+
+**Role hierarchy:**
+```
+Jesse           → read everything
+Officers        → read all agents under their chain + /bball, /logall, /memoryall
+Tech Lead       → read all E&M agents under them
+E&M agents      → read own logs only; cannot call *all commands
+```
+
+**TaskMaster / multi-tenant note:**
+In a hosted deployment, `/logall` and `/memoryall` must be restricted to the org owner.
+A low-level worker agent (e.g., Solder) must not be able to read Lexicon's ops logs or
+Songbird's architecture notes. Enforcement moves from trust-based to cryptographic
+(wallet-signed requests, verified against role registry) in Phase 3.
 
 ---
 
