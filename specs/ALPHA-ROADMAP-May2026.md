@@ -100,4 +100,14 @@ Proteus is fixing bugs right now. This plan is parked until those fixes land. We
 
 ---
 
+## Meta / Infrastructure
+
+| # | Task | ETA | Risk |
+|---|------|-----|------|
+| M.1 | **Maestro model-switch endpoint** — Add `/v1/model/switch` to transport so agents can be hot-swapped between models (e.g., Kimi ↔ Sonnet) without restarting transports | 4h | Low |
+
+*Rationale:* Currently switching an agent's model requires manually editing `~/.hermes/profiles/<agent>/config.yaml` and bouncing the transport process. A Maestro-native switch enables dynamic model selection for testing, cost control (Ollama vs. API), and the eventual agent hierarchy (Proteus delegates to Solder on local model, escalates to Songbird on Sonnet).
+
+---
+
 *Do not present this to Proteus until Phase 1 is done.*
