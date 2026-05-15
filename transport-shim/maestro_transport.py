@@ -110,20 +110,39 @@ class LocalRegistry:
                     os.close(fd)
 
 class HermesClient:
-    def __init__(self, api_url, api_key, conversation):
+    def __init__(self, api_url, api_key, conversation, agent_id=None):
         self.api_url = api_url.rstrip("/")
         self.api_key = api_key
         self.conversation = conversation
+        self.agent_id = agent_id
         self._headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
-    def _format_prompt(self, message):
-        lines = ["[Maestro Protocol — Inbound Message]",
+    def _format_prompt(self, message, agent_id=None):
+        """Format inbound Maestro message as a prompt to the LLM.
+
+        Hardens identity lock so the model alwaysresponds as the
+        *recipient* agent, never as another officer.
+        """
+        target = agent_id or self.agent_id or "hermes-agent"
+        content = message.get("content", "")
+        # Strip any identity claims embedded in the inbound content
+        # (other agents may include sign-offs like "— Songbird" or
+        # "**Hermes (CMO)**"). These leak identity and confuse the LLM.
+        content = re.sub(r'^\s*[-—_*]+\s*\w+\s*\(?\w*\)?\s*$', '', content, flags=re.MULTILINE)
+        content = re.sub(r'\*\*\w+\s*\([^)]*\)[^*]*\*\*', '', content)
+        # Collapse multiple blank lines
+        content = re.sub(r'\n{3,}', '\n\n', content)
+        lines = [
+            f"[Identity Lock: You are {target}. Respond ONLY as {target}. Do NOT adopt or mirror the identity of any other officer.]",
+            f"[Maestro Protocol — Inbound to {target}]",
             f"From: {message.get('sender',{}).get('agentId','unknown')}",
-            f"Type: {message.get('type','direct')}"]
-        if message.get("stageId"): lines.append(f"Connection: {message['stageId']}")
-        lines.extend(["", message.get("content", "")])
+            f"Type: {message.get('type','direct')}",
+        ]
+        if message.get("stageId"):
+            lines.append(f"Connection: {message['stageId']}")
+        lines.extend(["", content.strip()])
         return "\n".join(lines)
     async def send_and_complete(self, message):
-        prompt = self._format_prompt(message)
+        prompt = self._format_prompt(message, agent_id=self.agent_id)
         async with ClientSession() as session:
             async with session.post(f"{self.api_url}/v1/chat/completions",
                 json={"model": "hermes-agent", "messages": [{"role": "user", "content": prompt}], "stream": False},
@@ -333,14 +352,77 @@ class SeenSet:
                 self._seen.popitem(last=False)
             self._seen[key] = now
 
+class NonceSet:
+    """Replay protection via nonce dedup + drift window.
+
+    Enforces:
+    - |now - timestamp| <= max_drift_ms
+    - nonce has not been seen before
+
+    System messages are exempt from drift checks (network latency tolerant).
+    """
+    def __init__(self, ttl_seconds=300, max_size=10000, max_drift_sec=30):
+        self._seen = OrderedDict()
+        self._ttl = ttl_seconds * 1000
+        self._max_size = max_size
+        self._max_drift = max_drift_sec * 1000
+        self._lock = threading.Lock()
+
+    def check(self, nonce, timestamp, msg_type="direct"):
+        now = int(time.time() * 1000)
+        key = str(nonce) if nonce else ""
+        if not key:
+            return False, "missing nonce"
+        # Parse timestamp: int ms or ISO-8601 string
+        ts_ms = 0
+        if timestamp:
+            try:
+                if isinstance(timestamp, (int, float)):
+                    ts_ms = int(timestamp)
+                elif isinstance(timestamp, str):
+                    # strip trailing Z, parse
+                    s = timestamp.rstrip("Z")
+                    # python 3.11 fromisoformat handles milliseconds
+                    dt = datetime.fromisoformat(s)
+                    # Assume UTC if no tzinfo
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    ts_ms = int(dt.timestamp() * 1000)
+                else:
+                    ts_ms = int(timestamp)
+            except Exception:
+                return False, f"invalid timestamp format: {timestamp}"
+        # Drift check (system exempt)
+        if msg_type != "system" and ts_ms:
+            drift = abs(now - ts_ms)
+            if drift > self._max_drift:
+                return False, f"timestamp drift {drift}ms exceeds max {self._max_drift}ms"
+        with self._lock:
+            # Expire old entries
+            expired = [k for k, v in self._seen.items() if (now - v) > self._ttl]
+            for k in expired:
+                del self._seen[k]
+            if key in self._seen:
+                return False, "duplicate nonce"
+            # Prune if oversized
+            while len(self._seen) >= self._max_size:
+                self._seen.popitem(last=False)
+            self._seen[key] = now
+            return True, None
+
+    @staticmethod
+    def make_nonce():
+        return str(uuid.uuid4())
+
 class MaestroTransport:
     def __init__(self, config):
         self.config = config
         self.agent_id = config["agentId"]
         self.port = config["port"]
-        self.hermes = HermesClient(config["hermesApiUrl"], config["hermesApiKey"], config["conversation"])
+        self.hermes = HermesClient(config["hermesApiUrl"], config["hermesApiKey"], config["conversation"], agent_id=self.agent_id)
         self.registry = LocalRegistry(config["registryPath"])
         self.seen = SeenSet(ttl_seconds=300, max_size=10000)
+        self.nonce_set = NonceSet(ttl_seconds=300, max_size=10000, max_drift_sec=30)
         self.bb_root = Path("/home/andjesse/.maestro/blackboards")
         self.bb_root.mkdir(parents=True, exist_ok=True)
         self._loopback_count = 0  # diagnostic counter
@@ -350,6 +432,10 @@ class MaestroTransport:
         self.app.router.add_post("/message", self.handle_message)
         self.app.router.add_post("/maestro/webhook", self.handle_webhook)
         self.app.router.add_get("/connections/{connection_id}", self.handle_connection_get)
+        self.app.router.add_post("/maestro/notifications/toggle", self.handle_notifications_toggle)
+        self.app.router.add_post("/maestro/worklog/query", self.handle_worklog_query)
+        self.app.router.add_post("/maestro/task/start", self.handle_task_start)
+        self.app.router.add_post("/maestro/task/finish", self.handle_task_finish)
         # Calendar trigger engine (opt-in via config)
         self.calendar_watcher = None
         self._setup_calendar_watcher(config)
@@ -377,7 +463,19 @@ class MaestroTransport:
             return web.json_response({"accepted": True, "dedup": True})
         self.seen.add(msg_id)
 
+        # Replay protection: nonce + timestamp validation (backward-compat: allow if absent)
+        nonce = message.get("nonce")
+        ts = message.get("timestamp")
+        if nonce:
+            nonce_ok, nonce_reason = self.nonce_set.check(nonce, ts, msg_type)
+            if not nonce_ok:
+                log.warning(f"Replay/reject: nonce={nonce} from {sender}: {nonce_reason}")
+                return web.json_response({"accepted": False, "reason": nonce_reason}, status=400)
+
         log.info(f"Inbound from {sender} type={msg_type}")
+
+        # Write to work log before any processing
+        self._write_work_log(message)
 
         # Surface to gateway if configured
         if self.config.get("surfaceToGateway"):
@@ -385,7 +483,19 @@ class MaestroTransport:
 
         recipient = message.get("recipient")
 
-        # BB ops
+        # -- Structural message types: handled without LLM --
+        # directive: acknowledge receipt, no LLM processing
+        if msg_type == "directive":
+            log.info(f"Directive from {sender}: processing structurally")
+            asyncio.create_task(self._handle_directive(message))
+            return web.json_response({"accepted": True, "type": "directive", "agentId": self.agent_id})
+
+        # system: acknowledge, no LLM processing
+        if msg_type == "system":
+            log.info(f"System message from {sender}: acknowledged")
+            return web.json_response({"accepted": True, "type": "system", "agentId": self.agent_id})
+
+        # BB ops (structural, no LLM)
         if msg_type == "BB_WRITE":
             asyncio.create_task(self._process_bb_write(message))
             return web.json_response({"accepted": True})
@@ -397,7 +507,29 @@ class MaestroTransport:
         if recipient == "broadcast" or recipient == "*":
             asyncio.create_task(self._broadcast_fanout(message))
 
-        # Standard P2P → Hermes
+        # Auto-log tasks via message type hints
+        if msg_type == "task:start" or message.get("action") == "task:start":
+            desc = message.get("description", message.get("content", "Task started")).strip()
+            ts = int(message.get("timestamp", time.time() * 1000))
+            entry = {
+                "type": "start",
+                "agent_id": self.agent_id,
+                "description": desc,
+                "started_at": ts,
+                "started_at_iso": datetime.fromtimestamp(ts / 1000, tz=timezone.utc).isoformat(),
+                "finished_at": None,
+                "duration_sec": None,
+            }
+            self._append_task_log(self.agent_id, entry)
+            log.info(f"Task START: {desc}")
+        elif msg_type == "task:finish" or message.get("action") == "task:finish":
+            desc = message.get("description", "").strip()
+            ts = int(message.get("timestamp", time.time() * 1000))
+            updated = self._finish_task_log(self.agent_id, desc, ts)
+            if updated:
+                log.info(f"Task FINISH: {updated['description']} in {updated.get('duration_sec')}s")
+
+        # Standard P2P -> Hermes
         asyncio.create_task(self._process_message(message))
         return web.json_response({"accepted": True})
 
@@ -456,11 +588,12 @@ class MaestroTransport:
             return
         reply = {
             "id": str(uuid.uuid4()),
-            "type": "direct",
-            "content": content,
+            "type": "system",
+            "content": f"[{self.agent_id}] {content}",
             "sender": {"agentId": self.agent_id},
             "recipient": sender_id,
             "timestamp": int(time.time()*1000),
+            "nonce": NonceSet.make_nonce(),
             "version": self.config.get("version", "3.2"),
         }
         endpoint = sender_reg["webhookEndpoint"]
@@ -471,6 +604,20 @@ class MaestroTransport:
                     log.info(f"System reply to {sender_id}: {resp.status}")
             except Exception as e:
                 log.error(f"System reply failed to {sender_id} at {endpoint}: {type(e).__name__}: {e}")
+
+    async def _handle_directive(self, message):
+        """Acknowledge a directive receipt without LLM processing.
+
+        Logs the directive, optionally stores it in work log detail,
+        and routes an acknowledgment back to the sender.
+        """
+        sender = message.get("sender", {}).get("agentId", "?")
+        content = message.get("content", "")
+        log.info(f"Acknowledged directive from {sender}: {content[:200]}")
+        try:
+            await self._route_system_reply(message, f"DIRECTIVE ACK: Received '{content[:100]}...' — will execute.")
+        except Exception as e:
+            log.error(f"Failed to ack directive from {sender}: {e}")
 
     # ----------------------------------------------------------
     # Broadcast — fire-and-forget with dedup guard
@@ -543,16 +690,215 @@ class MaestroTransport:
     async def handle_connection_get(self, req):
         return web.json_response({"id": req.match_info["connection_id"], "status": "active", "agentId": self.agent_id})
 
+    # ------------------------------------------------------------------
+    # Notifications toggle (runtime on/off)
+    # ------------------------------------------------------------------
+
+    async def handle_notifications_toggle(self, req):
+        """POST /maestro/notifications/toggle — body: {"enabled": true|false} or {} to read current state."""
+        try:
+            data = await req.json()
+        except Exception:
+            data = {}
+        enabled = data.get("enabled")
+        flag_path = Path(f"/home/andjesse/.maestro/blackboards/surface_enabled_{self.agent_id}.json")
+        if enabled is None:
+            # Return current state
+            current = {"enabled": True}
+            if flag_path.exists():
+                try:
+                    current = json.loads(flag_path.read_text())
+                except Exception:
+                    pass
+            return web.json_response({"ok": True, "agent_id": self.agent_id, "notifications_enabled": current.get("enabled", True)})
+        try:
+            flag_path.write_text(json.dumps({"enabled": bool(enabled), "updated_at": int(time.time() * 1000)}, indent=2))
+            return web.json_response({"ok": True, "agent_id": self.agent_id, "notifications_enabled": enabled})
+        except Exception as e:
+            log.error(f"Failed to write surface_enabled: {e}")
+            return web.json_response({"ok": False, "reason": str(e)}, status=500)
+
+    # ------------------------------------------------------------------
+    # Work log blackboard
+    # ------------------------------------------------------------------
+
+    def _write_work_log(self, message: dict):
+        """Append inbound Maestro message to a structured work log."""
+        log_path = Path(f"/home/andjesse/.maestro/blackboards/work_log_{self.agent_id}.json")
+        entry = {
+            "id": message.get("id"),
+            "sender": message.get("sender", {}).get("agentId", "?"),
+            "type": message.get("type", "direct"),
+            "content": message.get("content", "")[:2000],
+            "timestamp": int(time.time() * 1000),
+            "timestamp_iso": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            logs = []
+            if log_path.exists():
+                try:
+                    logs = json.loads(log_path.read_text())
+                    if not isinstance(logs, list):
+                        logs = []
+                except Exception:
+                    logs = []
+            logs.append(entry)
+            # Keep last 200 entries per agent
+            logs = logs[-200:]
+            log_path.write_text(json.dumps(logs, indent=2, ensure_ascii=False))
+        except Exception as e:
+            log.warning(f"Work log write failed: {type(e).__name__}: {e}")
+
+    def _read_work_log(self, agent_id: str = None, limit: int = 20):
+        """Read work log entries. Defaults to this agent unless agent_id provided."""
+        target = agent_id or self.agent_id
+        log_path = Path(f"/home/andjesse/.maestro/blackboards/work_log_{target}.json")
+        if not log_path.exists():
+            return []
+        try:
+            logs = json.loads(log_path.read_text())
+            if not isinstance(logs, list):
+                return []
+            return logs[-limit:]
+        except Exception:
+            return []
+
+    async def handle_worklog_query(self, req):
+        """POST /maestro/worklog/query — body: {\"agent_id\": \"proteus\", \"limit\": 10}"""
+        try:
+            data = await req.json()
+        except Exception:
+            data = {}
+        agent_id = data.get("agent_id") or self.agent_id
+        limit = min(int(data.get("limit", 20)), 100)
+        entries = self._read_work_log(agent_id=agent_id, limit=limit)
+        return web.json_response({"ok": True, "agent_id": agent_id, "count": len(entries), "entries": entries})
+
+    # ------------------------------------------------------------------
+    # Task tracking (start/finish timestamps for /work /workall display)
+    # ------------------------------------------------------------------
+
+    async def handle_task_start(self, req):
+        """POST /maestro/task/start — body: {agent_id, description, timestamp}.
+        Appends a START record to the agent's task log.
+        """
+        try: data = await req.json()
+        except Exception: data = {}
+        agent_id = data.get("agent_id") or self.agent_id
+        desc = data.get("description", data.get("content", "Task started")).strip()
+        ts = int(data.get("timestamp", time.time() * 1000))
+        if not desc:
+            return web.json_response({"ok": False, "error": "missing description"}, status=400)
+        entry = {
+            "type": "start",
+            "agent_id": agent_id,
+            "description": desc,
+            "started_at": ts,
+            "started_at_iso": datetime.fromtimestamp(ts / 1000, tz=timezone.utc).isoformat(),
+            "finished_at": None,
+            "duration_sec": None,
+        }
+        self._append_task_log(agent_id, entry)
+        return web.json_response({"ok": True, "agent_id": agent_id, "task": entry})
+
+    async def handle_task_finish(self, req):
+        """POST /maestro/task/finish — body: {agent_id, description, timestamp}.
+        Marks the most recent matching START record as finished.
+        """
+        try: data = await req.json()
+        except Exception: data = {}
+        agent_id = data.get("agent_id") or self.agent_id
+        desc = data.get("description", "").strip()
+        ts = int(data.get("timestamp", time.time() * 1000))
+        updated = self._finish_task_log(agent_id, desc, ts)
+        return web.json_response({"ok": updated is not None, "agent_id": agent_id, "updated": updated})
+
+    def _task_log_path(self, agent_id: str) -> Path:
+        return self.bb_root / f"task_log_{agent_id}.json"
+
+    def _append_task_log(self, agent_id: str, entry: dict):
+        p = self._task_log_path(agent_id)
+        logs = []
+        if p.exists():
+            try:
+                logs = json.loads(p.read_text())
+                if not isinstance(logs, list): logs = []
+            except Exception: logs = []
+        logs.append(entry)
+        logs = logs[-200:]  # cap
+        try:
+            p.write_text(json.dumps(logs, indent=2, ensure_ascii=False))
+        except Exception as e:
+            log.warning(f"Task log write failed: {e}")
+
+    def _finish_task_log(self, agent_id: str, description: str, ts: int) -> dict | None:
+        p = self._task_log_path(agent_id)
+        if not p.exists(): return None
+        try:
+            logs = json.loads(p.read_text())
+            if not isinstance(logs, list): return None
+            entry = None
+            if description:
+                entry = next((e for e in reversed(logs) if e.get("type") == "start" and e.get("description") == description), None)
+            if not entry:
+                entry = next((e for e in reversed(logs) if e.get("type") == "start" and e.get("finished_at") is None), None)
+            if not entry: return None
+            entry["finished_at"] = ts
+            entry["finished_at_iso"] = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).isoformat()
+            start_ts = entry.get("started_at", ts)
+            entry["duration_sec"] = round((ts - start_ts) / 1000, 1)
+            p.write_text(json.dumps(logs, indent=2, ensure_ascii=False))
+            return entry
+        except Exception as e:
+            log.warning(f"Task log finish failed: {e}")
+            return None
+
+    def _read_task_log(self, agent_id: str = None, limit: int = 20) -> list:
+        target = agent_id or self.agent_id
+        p = self._task_log_path(target)
+        if not p.exists(): return []
+        try:
+            logs = json.loads(p.read_text())
+            if not isinstance(logs, list): return []
+            return logs[-limit:]
+        except Exception: return []
+
+    # ------------------------------------------------------------------
+    # Gateway surface
+    # ------------------------------------------------------------------
+
     async def _surface_to_gateway(self, message: dict):
         """Post a lightweight notification to the gateway bridge for Telegram visibility."""
+        # Runtime toggle: check per-agent file-based flag so Jesse can turn notifications off per agent
+        enable_path = Path(f"/home/andjesse/.maestro/blackboards/surface_enabled_{self.agent_id}.json")
+        if enable_path.exists():
+            try:
+                data = json.loads(enable_path.read_text())
+                if isinstance(data, dict) and data.get("enabled", True) is False:
+                    return
+            except Exception:
+                pass
+        # Fallback to legacy global flag for backward compat
+        legacy_path = Path("/home/andjesse/.maestro/surface_enabled")
+        if legacy_path.exists():
+            try:
+                if legacy_path.read_text().strip().lower() == "false":
+                    return
+            except Exception:
+                pass
         bridge_url = self.config.get("gatewayBridgeUrl", "http://127.0.0.1:8644/maestro/notify")
         sender = message.get("sender", {}).get("agentId", "?")
         try:
+            content = message.get("content", "")
+            # Telegram message limit is 4096 chars. Use full content up to that,
+            # truncate with ellipsis if over, and attach a file hint for overflow.
+            if len(content) > 3900:
+                content = content[:3897] + "..."
             payload = {
                 "agent_id": self.agent_id,
                 "from": sender,
-                "content": message.get("content", ""),
-                "summary": message.get("content", "")[:200],
+                "content": content,
+                "summary": content[:200],
                 "msg_type": message.get("type", "direct"),
             }
             async with ClientSession() as s:

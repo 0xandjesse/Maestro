@@ -105,3 +105,7 @@ export type {
 } from './connection/index.js';
 export { ConnectionManager, DEFAULT_PERMISSIONS, enforceProvenancePolicy } from './connection/index.js';
 export type { EnforcementResult } from './connection/index.js';
+
+// Transport (nonce / replay protection)
+export { NonceSet } from './transport/NonceSet.js';
+
