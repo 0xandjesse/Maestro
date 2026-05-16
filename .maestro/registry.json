@@ -1,0 +1,16 @@
+[
+  {
+    "agentId": "songbird",
+    "webhookEndpoint": "http://10.0.2.2:3842/message",
+    "capabilities": ["openclaw"],
+    "registeredAt": 1746144000000,
+    "lastSeen": 1746144000000
+  },
+  {
+    "agentId": "hermes-lex",
+    "webhookEndpoint": "http://0.0.0.0:3844/message",
+    "capabilities": ["maestro-transport", "hermes-agent"],
+    "registeredAt": 1746144000000,
+    "lastSeen": 1746144000000
+  }
+]

@@ -1,0 +1,8 @@
+{
+  "agentId": "test-smoke-agent",
+  "port": 39998,
+  "hermesApiUrl": "http://127.0.0.1:8642",
+  "hermesApiKey": "test",
+  "conversation": "test",
+  "registryPath": ".maestro/test_registry.json"
+}
