@@ -137,19 +137,32 @@ async def _notify_handler(request: web.Request) -> web.Response:
         # Telegram message limit: 4096 chars. If content is long, send as document
         # with a short header; otherwise send inline.
         TELEGRAM_MSG_LIMIT = 4096
-        HEADER = f"📨 Maestro {msg_type} from {from_agent}:\n\n"
+
+        # NEW: handle outbound mirror type
+        if msg_type == "maestro_out":
+            HEADER = f"📤 Outbound Maestro | to {data.get('to', from_agent)}:\n\n"
+        else:
+            HEADER = f"📨 Maestro {msg_type} from {from_agent}:\n\n"
         full_text = HEADER + content
 
         if len(full_text) <= TELEGRAM_MSG_LIMIT:
-            # Escape Markdown special chars in content to avoid parse errors
-            text = full_text.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
+            if msg_type == "maestro_out":
+                # Italicize the mirrored content for visual distinction;
+                # keep the header bold via * and wrap body in _
+                text = HEADER + "_" + content.replace("_", "\\_") + "_"
+            else:
+                # Escape Markdown special chars in content to avoid parse errors
+                text = full_text.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
             result = await _send_telegram(tcfg["token"], chat_id, text, parse_mode="Markdown")
             if result["ok"]:
                 return web.json_response({"ok": True, "message_id": result.get("message_id")})
             return web.json_response({"ok": False, "reason": result["error"]}, status=502)
         else:
             # Send short header inline, content as file
-            short = (HEADER + content[:200] + "...\n\n[Full message attached]").replace("_", "\\_")
+            if msg_type == "maestro_out":
+                short = HEADER + "_" + content[:200].replace("_", "\\_") + " ... [Full message attached]_"
+            else:
+                short = (HEADER + content[:200] + "...\n\n[Full message attached]").replace("_", "\\_")
             short_result = await _send_telegram(tcfg["token"], chat_id, short, parse_mode="Markdown")
             file_result = await _send_telegram_document(
                 tcfg["token"], chat_id, content.encode("utf-8"),

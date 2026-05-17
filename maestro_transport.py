@@ -130,68 +130,69 @@ class HermesClient:
     def _format_prompt(self, message, agent_id=None):
         """Format inbound Maestro message as a prompt to the LLM.
 
-        Hardens identity lock so the model alwaysresponds as the
+        Hardens identity lock so the model always responds as the
         *recipient* agent, never as another officer.
+
+        For directives specifically, appends a tooling reminder so the
+        agent knows send_message is available for TG delivery — models
+        sometimes incorrectly claim tools are unavailable in API sessions.
         """
         target = agent_id or self.agent_id or "hermes-agent"
+        msg_type = message.get("type", "direct")
         content = message.get("content", "")
         if isinstance(content, dict):
             content = json.dumps(content, indent=2)
         elif not isinstance(content, str):
             content = str(content)
         # Strip any identity claims embedded in the inbound content
-        # (other agents may include sign-offs like "— Songbird" or
-        # "**Hermes (CMO)**"). These leak identity and confuse the LLM.
-        content = re.sub(r'^\s*[-—_*]+\s*\w+\s*\(?\w*\)?\s*$', '', content, flags=re.MULTILINE)
+        content = re.sub(r'^\s*[-—_*]+\s*\w+\s*\(?\\w*\)?\s*$', '', content, flags=re.MULTILINE)
         content = re.sub(r'\*\*\w+\s*\([^)]*\)[^*]*\*\*', '', content)
-        # Collapse multiple blank lines
         content = re.sub(r'\n{3,}', '\n\n', content)
         lines = [
             f"[Identity Lock: You are {target}. Respond ONLY as {target}. Do NOT adopt or mirror the identity of any other officer.]",
             f"[Maestro Protocol — Inbound to {target}]",
             f"From: {message.get('sender',{}).get('agentId','unknown')}",
-            f"Type: {message.get('type','direct')}",
+            f"Type: {msg_type}",
         ]
         if message.get("stageId"):
             lines.append(f"Connection: {message['stageId']}")
         lines.extend(["", content.strip()])
+        # Directive-specific tooling reminder: agents sometimes incorrectly claim
+        # send_message is unavailable in API-triggered sessions. It is available.
+        if msg_type == "directive":
+            lines.extend([
+                "",
+                "[Directive Execution Note]",
+                "Your full toolset is available in this session, including send_message.",
+                "To deliver a file to Jesse: call send_message with target='telegram' and message='MEDIA:' followed by the absolute path of the file you saved.",
+                "To deliver text to Jesse: call send_message with target='telegram' and your message string.",
+                "Do NOT claim tools are unavailable. If a tool call fails, report the actual error.",
+                "If a checklist_id was provided in this directive, call checklist_complete_item when done.",
+            ])
         return "\n".join(lines)
     async def send_and_complete(self, message):
-        """Forward Maestro message to the local gateway /v1/maestro endpoint.
+        """Forward Maestro message to the local gateway /v1/chat/completions endpoint.
 
         The gateway runs the full agent tool loop and returns the final
         response.  This keeps the transport thin and the gateway as the
         single execution surface.
+
+        Timeout is 1500s (25 min) — generous enough for long multi-tool
+        tasks (write + upload, multi-step research, etc.) while still
+        catching truly hung sessions.  Directives use fire-and-forget
+        so this timeout only applies to direct/p2p messages that need a
+        synchronous reply.
         """
-        # Try /v1/maestro first (thin-transport pattern)
-        async with ClientSession() as session:
-            async with session.post(
-                f"{self.api_url}/v1/maestro",
-                json={
-                    "id": message.get("id") or str(uuid.uuid4()),
-                    "type": message.get("type", "direct"),
-                    "content": message.get("content", ""),
-                    "sender": message.get("sender", {"agentId": "unknown"}),
-                    "recipient": self.agent_id,
-                },
-                headers=self._headers,
-                timeout=ClientTimeout(total=240),
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    output = data.get("response", "")
-                    if output:
-                        log.info(f"Response from gateway: {output[:80]}...")
-                        return output
-                    return None
-                log.error(f"/v1/maestro failed {resp.status}: {await resp.text()}")
-        # Fallback to the legacy /v1/chat/completions path if /v1/maestro is unavailable
+        session_id = message.get("id") or str(uuid.uuid4())
+        _log_message(self.agent_id, "send", params=message, result=None, session_id=session_id)
+
+        # Use /v1/chat/completions (the gateway's stable API endpoint)
         prompt = self._format_prompt(message, agent_id=self.agent_id)
         async with ClientSession() as session:
             async with session.post(
                 f"{self.api_url}/v1/chat/completions",
                 json={"model": "hermes-agent", "messages": [{"role": "user", "content": prompt}], "stream": False},
-                headers=self._headers, timeout=ClientTimeout(total=120)
+                headers=self._headers, timeout=ClientTimeout(total=1500)
             ) as resp:
                 if resp.status != 200:
                     log.error(f"Chat completions failed {resp.status}: {await resp.text()}")
@@ -200,6 +201,7 @@ class HermesClient:
                 output = data.get("choices", [{}])[0].get("message", {}).get("content")
                 if output:
                     log.info(f"Response: {output[:80]}...")
+                    _log_message(self.agent_id, "receive", params=message, result=output, session_id=session_id)
                 return output
     async def health_check(self):
         try:
@@ -627,7 +629,17 @@ class MemoryService:
         return {"ok": True, "memories": results, "count": total}
 
 class MaestroTransport:
+    # Strong references to background tasks to prevent GC before completion
+    _background_tasks: set = set()
+
+    # Loop prevention constants
+    RATE_LIMIT_MAX = 3       # max messages per sender in window
+    RATE_LIMIT_WINDOW = 300  # seconds (5 minutes)
+    DEDUP_WINDOW = 300       # seconds (5 minutes)
+    DEDUP_MAX_ENTRIES = 1000 # prune when exceeded
+
     def __init__(self, config):
+        from collections import defaultdict, deque
         self.config = config
         self.logger = AgentLogger()
         self.agent_id = config["agentId"]
@@ -636,10 +648,13 @@ class MaestroTransport:
         self.registry = LocalRegistry(config["registryPath"])
         self.seen = SeenSet(ttl_seconds=300, max_size=10000)
         self.nonce_set = NonceSet(ttl_seconds=300, max_size=10000, max_drift_sec=30)
-        self.bb_root = Path("/home/andjesse/.maestro/blackboards")
+        self.bb_root = Path(os.path.expanduser("~/.maestro/blackboards"))
         self.bb_root.mkdir(parents=True, exist_ok=True)
         self._loopback_count = 0  # diagnostic counter
         self.started_at = None
+        # Loop prevention state
+        self._last_content: dict = {}  # sender_id -> (content_hash, timestamp)
+        self._sender_message_times: dict = defaultdict(deque)  # sender_id -> deque of timestamps
         self.app = web.Application()
         self.app.router.add_get("/health", self.handle_health)
         self.app.router.add_post("/message", self.handle_message)
@@ -718,7 +733,9 @@ class MaestroTransport:
         # directive: acknowledge receipt, no LLM processing
         if msg_type == "directive":
             log.info(f"Directive from {sender}: processing structurally")
-            asyncio.create_task(self._handle_directive(message))
+            task = asyncio.create_task(self._handle_directive(message))
+            MaestroTransport._background_tasks.add(task)
+            task.add_done_callback(MaestroTransport._background_tasks.discard)
             return web.json_response({"accepted": True, "type": "directive", "agentId": self.agent_id})
 
         # system: acknowledge, no LLM processing
@@ -928,18 +945,26 @@ class MaestroTransport:
                 log.error(f"System reply failed to {sender_id} at {endpoint}: {type(e).__name__}: {e}")
 
     async def _handle_directive(self, message):
-        """Acknowledge a directive receipt without LLM processing.
+        """Process a directive: fire-and-forget into the LLM loop.
 
-        Logs the directive, optionally stores it in work log detail,
-        and routes an acknowledgment back to the sender.
+        Directives are high-priority instructions from officers.
+        The transport has already ACK'd receipt (before this coroutine
+        was scheduled), so we do NOT await _process_message — we spawn
+        it as a background task and return immediately.  The agent is
+        responsible for reporting completion via checklist_complete_item
+        or a follow-up Maestro direct message back to the sender.
+
+        This means the directive sender never blocks waiting for a
+        synchronous response, and long-running tasks (write + upload,
+        multi-step research, etc.) work without any timeout concern.
         """
         sender = message.get("sender", {}).get("agentId", "?")
         content = message.get("content", "")
-        log.info(f"Acknowledged directive from {sender}: {content[:200]}")
-        try:
-            await self._route_system_reply(message, f"DIRECTIVE ACK: Received '{content[:100]}...' — will execute.")
-        except Exception as e:
-            log.error(f"Failed to ack directive from {sender}: {e}")
+        log.info(f"Directive from {sender} — spawning background task: {content[:200]}")
+        task = asyncio.create_task(self._process_message(message))
+        MaestroTransport._background_tasks.add(task)
+        task.add_done_callback(MaestroTransport._background_tasks.discard)
+        log.info(f"Background task created: {task!r} total_tracked={len(MaestroTransport._background_tasks)}")
 
     # ----------------------------------------------------------
     # Broadcast — fire-and-forget with dedup guard
@@ -971,17 +996,103 @@ class MaestroTransport:
             except Exception as e:
                 log.error(f"Deliver failed to {endpoint}: {type(e).__name__}: {e}")
 
+    async def _notify_loop_detected(self, sender_id: str, reason: str, content_preview: str):
+        """Surface a loop detection warning to Jesse via the gateway bridge. Best-effort — never raises."""
+        try:
+            bridge_url = self.config.get("gatewayBridgeUrl", "http://127.0.0.1:8644/maestro/notify")
+            payload = {
+                "agent_id": self.agent_id,
+                "from": self.agent_id,
+                "to": "jesse",
+                "content": (
+                    f"⚠️ Loop detected on {self.agent_id}: dropping message from {sender_id} "
+                    f"(reason: {reason}).\nPreview: {content_preview}"
+                ),
+                "summary": f"Loop detected: {sender_id} → {self.agent_id} ({reason})",
+                "msg_type": "loop_warning",
+            }
+            async with ClientSession() as s:
+                async with s.post(bridge_url, json=payload, timeout=ClientTimeout(total=5)) as resp:
+                    log.info(f"[LOOP] Jesse notified: {resp.status}")
+        except Exception as e:
+            log.warning(f"[LOOP] Failed to notify Jesse: {e}")
+
     # ----------------------------------------------------------
     # Standard P2P → Hermes
     # ----------------------------------------------------------
 
     async def _process_message(self, message):
         try:
+            log.info(f"_process_message ENTERED for msg_id={message.get('id')} type={message.get('type')}")
+            # Drop billing error messages — responding to these creates an infinite loop
+            # (agent responds → sender resends the same error → repeat forever)
+            content = message.get("content", "")
+            if "402" in content or "Insufficient credits" in content or "HTTP 402" in content:
+                log.warning(f"Dropping billing error message from {message.get('sender', {}).get('agentId', '?')} — suppressing to avoid reply loop")
+                return
+
+            # --- Loop prevention: dedup + rate limiting ---
+            sender_id = message.get("sender", {}).get("agentId", "unknown")
+            now = time.time()
+
+            # 1. Duplicate content dedup
+            content_hash = hash(content)
+            if sender_id in self._last_content:
+                last_hash, last_ts = self._last_content[sender_id]
+                if last_hash == content_hash and (now - last_ts) < self.DEDUP_WINDOW:
+                    log.warning(f"[LOOP] Dropping duplicate message from {sender_id} — identical content within {self.DEDUP_WINDOW}s")
+                    asyncio.create_task(self._notify_loop_detected(sender_id, "duplicate", content[:120]))
+                    return
+            self._last_content[sender_id] = (content_hash, now)
+
+            # Prune dedup cache if it grows too large
+            if len(self._last_content) > self.DEDUP_MAX_ENTRIES:
+                oldest = sorted(self._last_content.items(), key=lambda x: x[1][1])
+                self._last_content = dict(oldest[self.DEDUP_MAX_ENTRIES // 2:])
+
+            # 2. Rate limiter
+            times = self._sender_message_times[sender_id]
+            times.append(now)
+            while times and (now - times[0]) > self.RATE_LIMIT_WINDOW:
+                times.popleft()
+            if len(times) > self.RATE_LIMIT_MAX:
+                log.warning(f"[LOOP] Rate limit exceeded: {sender_id} sent {len(times)} messages in {self.RATE_LIMIT_WINDOW}s (max {self.RATE_LIMIT_MAX})")
+                asyncio.create_task(self._notify_loop_detected(sender_id, "rate_limit", content[:120]))
+                return
+            # --- End loop prevention ---
+
             log.debug(f"Forward to Hermes: {message.get('id')}")
             output = await self.hermes.send_and_complete(message)
             if not output:
                 log.warning("No output from Hermes — not routing reply")
                 return
+            # Directives are fire-and-forget: the agent delivers results directly
+            # (via send_message to TG, checklist_complete_item, etc.).
+            # Do NOT bounce the LLM response back through Maestro — it creates
+            # noisy surface notifications on the sender's side.
+            if message.get("type") == "directive":
+                log.info(f"Directive complete — suppressing Maestro reply (agent delivers directly)")
+                return
+            # NEW: Outbound mirror — if maestro_out is ON, surface reply to gateway
+            try:
+                visibility_path = Path(os.environ.get("HERMES_HOME", "/home/andjesse/.hermes")) / "maestro_visibility.json"
+                if visibility_path.exists():
+                    vis = json.loads(visibility_path.read_text())
+                    profile = self.agent_id
+                    if isinstance(vis, dict) and profile in vis and vis[profile].get("out", False):
+                        bridge_url = self.config.get("gatewayBridgeUrl", "http://127.0.0.1:8644/maestro/notify")
+                        sender_id = message.get("sender", {}).get("agentId", "?")
+                        mirror_payload = {
+                            "agent_id": profile,
+                            "from": profile,
+                            "to": sender_id,
+                            "content": output,
+                            "summary": f"Reply to {sender_id}: {output[:200]}",
+                            "msg_type": "maestro_out",
+                        }
+                        asyncio.create_task(self._deliver(bridge_url, mirror_payload))
+            except Exception:
+                pass
             sender_id = message["sender"]["agentId"]
             sender_reg = self.registry.lookup(sender_id)
             if not sender_reg:
@@ -1224,6 +1335,18 @@ class MaestroTransport:
                     return
             except Exception:
                 pass
+        # NEW: Check maestro_in toggle from gateway state
+        try:
+            visibility_path = Path(os.environ.get("HERMES_HOME", "/home/andjesse/.hermes")) / "maestro_visibility.json"
+            if visibility_path.exists():
+                vis = json.loads(visibility_path.read_text())
+                profile = self.agent_id
+                if isinstance(vis, dict) and profile in vis:
+                    if vis[profile].get("in", False) is False:
+                        log.debug(f"Gateway surface suppressed — maestro_in is OFF for {profile}")
+                        return
+        except Exception:
+            pass
         bridge_url = self.config.get("gatewayBridgeUrl", "http://127.0.0.1:8644/maestro/notify")
         sender = message.get("sender", {}).get("agentId", "?")
         try:

@@ -153,29 +153,7 @@ class HermesClient:
         response.  This keeps the transport thin and the gateway as the
         single execution surface.
         """
-        # Try /v1/maestro first (thin-transport pattern)
-        async with ClientSession() as session:
-            async with session.post(
-                f"{self.api_url}/v1/maestro",
-                json={
-                    "id": message.get("id") or str(uuid.uuid4()),
-                    "type": message.get("type", "direct"),
-                    "content": message.get("content", ""),
-                    "sender": message.get("sender", {"agentId": "unknown"}),
-                    "recipient": self.agent_id,
-                },
-                headers=self._headers,
-                timeout=ClientTimeout(total=240),
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    output = data.get("response", "")
-                    if output:
-                        log.info(f"Response from gateway: {output[:80]}...")
-                        return output
-                    return None
-                log.error(f"/v1/maestro failed {resp.status}: {await resp.text()}")
-        # Fallback to the legacy /v1/chat/completions path if /v1/maestro is unavailable
+        # Use /v1/chat/completions (the gateway's stable API endpoint)
         prompt = self._format_prompt(message, agent_id=self.agent_id)
         async with ClientSession() as session:
             async with session.post(
@@ -913,18 +891,16 @@ class MaestroTransport:
                 log.error(f"System reply failed to {sender_id} at {endpoint}: {type(e).__name__}: {e}")
 
     async def _handle_directive(self, message):
-        """Acknowledge a directive receipt without LLM processing.
+        """Process a directive: route to LLM and reply with result.
 
-        Logs the directive, optionally stores it in work log detail,
-        and routes an acknowledgment back to the sender.
+        Directives are high-priority instructions from officers.
+        They go through the full LLM loop, not just ACK.
         """
         sender = message.get("sender", {}).get("agentId", "?")
         content = message.get("content", "")
-        log.info(f"Acknowledged directive from {sender}: {content[:200]}")
-        try:
-            await self._route_system_reply(message, f"DIRECTIVE ACK: Received '{content[:100]}...' — will execute.")
-        except Exception as e:
-            log.error(f"Failed to ack directive from {sender}: {e}")
+        log.info(f"Processing directive from {sender}: {content[:200]}")
+        # Route through full LLM loop — same as _process_message
+        await self._process_message(message)
 
     # ----------------------------------------------------------
     # Broadcast — fire-and-forget with dedup guard

@@ -78,3 +78,19 @@ def log_message(
     with _lock:
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(line + "\n")
+
+
+def log_task_start(agent_id: str, task_id: str, description: str, session_id: str = None):
+    """Log a task start event."""
+    log_message(agent_id, "task_start",
+                params={"task_id": task_id, "description": description},
+                result=None, session_id=session_id)
+
+
+def log_task_finish(agent_id: str, task_id: str, description: str,
+                    duration_ms: int = None, status: str = "ok", session_id: str = None):
+    """Log a task finish event."""
+    log_message(agent_id, "task_finish",
+                params={"task_id": task_id, "description": description,
+                        "duration_ms": duration_ms, "status": status},
+                result=None, session_id=session_id)
