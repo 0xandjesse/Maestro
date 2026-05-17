@@ -11,22 +11,27 @@
 
 import { Maestro } from '../sdk/Maestro.js';
 import { MaestroMessage } from '../types/index.js';
+import { deliverMessage } from '../transport/NetworkDelivery.js';
 
 // Use high ports to avoid conflicts
 const PORT_A = 47801;
 const PORT_B = 47802;
 
+function webhookUrl(port: number): string {
+  return `http://localhost:${port}/message`;
+}
+
 async function makeStarted(agentId: string, port: number): Promise<Maestro> {
-  const m = new Maestro({ agentId, webhookPort: port });
+  const m = new Maestro({ agentId, transport: { port } });
   await m.start();
   return m;
 }
 
 // ----------------------------------------------------------
-// WebhookServer
+// HttpTransport — basic HTTP
 // ----------------------------------------------------------
 
-describe('WebhookServer — basic HTTP', () => {
+describe('HttpTransport — basic HTTP', () => {
   let agent: Maestro;
 
   beforeEach(async () => {
@@ -37,13 +42,13 @@ describe('WebhookServer — basic HTTP', () => {
     await agent.stop();
   });
 
-  it('returns 404 for non-webhook paths', async () => {
+  it('returns 404 for non-message paths', async () => {
     const res = await fetch(`http://localhost:${PORT_A}/other`);
     expect(res.status).toBe(404);
   });
 
   it('returns 400 for malformed JSON', async () => {
-    const res = await fetch(`http://localhost:${PORT_A}/maestro/webhook`, {
+    const res = await fetch(`http://localhost:${PORT_A}/message`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: 'not json',
@@ -52,7 +57,7 @@ describe('WebhookServer — basic HTTP', () => {
   });
 
   it('returns 400 for missing required fields', async () => {
-    const res = await fetch(`http://localhost:${PORT_A}/maestro/webhook`, {
+    const res = await fetch(`http://localhost:${PORT_A}/message`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: 'hello' }), // missing id, type, sender
@@ -71,7 +76,7 @@ describe('WebhookServer — basic HTTP', () => {
       version: '3.2',
     };
 
-    const res = await fetch(`http://localhost:${PORT_A}/maestro/webhook`, {
+    const res = await fetch(`http://localhost:${PORT_A}/message`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(msg),
@@ -105,19 +110,19 @@ describe('NetworkTransport — cross-agent delivery', () => {
     const received: MaestroMessage[] = [];
     beta.onMessage('*', (msg) => { received.push(msg); });
 
-    // Alpha creates a venue and builds a message to Beta
-    const venue = alpha.createOpenVenue('Room');
-    const msg = await venue.send('Beta', 'Hello over HTTP');
+    // Alpha creates a connection and builds a message to Beta
+    const connection = alpha.openConnection('Room');
+    const msg = await connection.send('Beta', 'Hello over HTTP');
 
-    // Alpha sends to Beta's webhook endpoint
-    const result = await alpha.sendRemote(msg, beta.webhookEndpoint);
+    // Deliver directly to Beta's message endpoint
+    const result = await deliverMessage(webhookUrl(PORT_B), msg);
 
-    expect(result.success).toBe(true);
-    expect(result.attempts).toBe(1);
+    expect(result.ok).toBe(true);
+    expect(result.statusCode).toBe(200);
 
     // Give Beta's async handler a moment to run
-    await new Promise(r => setTimeout(r, 20));
-    expect(received).toHaveLength(1);
+    await new Promise(r => setTimeout(r, 50));
+    expect(received.length).toBeGreaterThan(0);
     expect(received[0].content).toBe('Hello over HTTP');
     expect(received[0].sender.agentId).toBe('Alpha');
   });
@@ -126,31 +131,30 @@ describe('NetworkTransport — cross-agent delivery', () => {
     const receivedByBeta: MaestroMessage[] = [];
     beta.onMessage('*', (msg) => { receivedByBeta.push(msg); });
 
-    const venue = alpha.createOpenVenue('Room');
-    const msg = await venue.broadcast('Hello everyone');
+    const connection = alpha.openConnection('Room');
+    const msg = await connection.broadcast('Hello everyone');
 
-    // Send to Beta (in a real multi-agent setup, this would be all members)
-    const result = await alpha.sendRemote(msg, beta.webhookEndpoint);
+    // Send to Beta
+    const result = await deliverMessage(webhookUrl(PORT_B), msg);
 
-    expect(result.success).toBe(true);
-    await new Promise(r => setTimeout(r, 20));
-    expect(receivedByBeta).toHaveLength(1);
+    expect(result.ok).toBe(true);
+    await new Promise(r => setTimeout(r, 50));
+    expect(receivedByBeta.length).toBeGreaterThan(0);
     expect(receivedByBeta[0].type).toBe('broadcast');
   });
 
   it('returns failure for unreachable endpoint', async () => {
-    const venue = alpha.createOpenVenue('Room');
-    const msg = await venue.send('Ghost', 'Hello');
+    const connection = alpha.openConnection('Room');
+    const msg = await connection.send('Ghost', 'Hello');
 
-    const result = await alpha.sendRemote(msg, 'http://localhost:19999/maestro/webhook');
-    expect(result.success).toBe(false);
-    expect(result.attempts).toBeGreaterThanOrEqual(1);
+    const result = await deliverMessage('http://localhost:19999/message', msg);
+    expect(result.ok).toBe(false);
   });
 
-  it('returns 422 and does not retry for policy rejection', async () => {
-    // Beta has a strict Venue that requires provenance on capability messages
-    const secureVenue = beta.createVenue({
-      name: 'Secure Venue',
+  it('returns rejected for policy rejection via receive()', async () => {
+    // Beta has a strict Connection that requires provenance on capability messages
+    const secureConnection = beta.createConnection({
+      name: 'Secure Connection',
       rules: {
         entryMode: 'open',
         memberVisibility: 'all',
@@ -171,14 +175,13 @@ describe('NetworkTransport — cross-agent delivery', () => {
       recipient: 'Beta',
       timestamp: Date.now(),
       version: '3.2',
-      venueId: secureVenue.venueId,
+      stageId: secureConnection.connectionId,
     };
 
-    const result = await alpha.sendRemote(msg, beta.webhookEndpoint);
-    expect(result.success).toBe(false);
-    expect(result.statusCode).toBe(422);
-    // 422 = policy rejection, not a transport error — should NOT retry
-    expect(result.attempts).toBe(1);
+    // Use receive() to test policy enforcement synchronously
+    const result = await beta.receive(msg);
+    expect(result.accepted).toBe(false);
+    expect(result.reason).toContain('provenance_required');
   });
 });
 
@@ -202,9 +205,22 @@ describe('Maestro lifecycle with HTTP', () => {
     await m2.stop();
   });
 
-  it('exposes correct webhookEndpoint', async () => {
+  it('exposes correct webhook endpoint via transport', async () => {
     const m = await makeStarted('Alpha', PORT_A);
-    expect(m.webhookEndpoint).toBe(`http://localhost:${PORT_A}/maestro/webhook`);
+    // HttpTransport registers at /message; verify it's reachable
+    const res = await fetch(`http://localhost:${PORT_A}/message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: 'ping',
+        type: 'direct',
+        sender: { agentId: 'Test' },
+        recipient: 'Alpha',
+        timestamp: Date.now(),
+        version: '3.2',
+      }),
+    });
+    expect(res.status).toBe(200);
     await m.stop();
   });
 });

@@ -173,6 +173,13 @@ export interface MaestroMessage {
 
   /** Optional structured payload — type-specific data (e.g. venue:invitation details, blackboard:update entry) */
   payload?: Record<string, unknown>;
+
+  /**
+   * Optional protocol extensions map.
+   * Key: extension name (e.g. 'maestro.economic_signal')
+   * Value: extension payload object
+   */
+  extensions?: Record<string, unknown>;
 }
 
 // ----------------------------------------------------------

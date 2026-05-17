@@ -84,6 +84,17 @@ export type { StoredConnection } from './transport/ConnectionStore.js';
 // SDK
 export { Maestro, ConnectionHandle } from './sdk/index.js';
 
+// Extensions
+export {
+  validateEconomicSignal,
+  extractEconomicSignal,
+  buildEconomicSignalExtension,
+  renderEconomicSignal,
+  ECONOMIC_SIGNAL_KEY,
+  ECONOMIC_SIGNAL_DISCLAIMER,
+} from './extensions/economic_signal.js';
+export type { EconomicSignal, ValidationResult } from './extensions/economic_signal.js';
+
 // Connection
 export type {
   Connection,
