@@ -165,6 +165,9 @@ export interface MaestroMessage {
   /** Optional Stage context */
   stageId?: string;
 
+  /** The Venue/Connection this message belongs to */
+  venueId?: string;
+
   /** replyTo message ID for threading / backwards provenance */
   replyTo?: string;
 

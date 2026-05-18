@@ -26,6 +26,8 @@ export interface SendOptions {
   replyTo?: string;
   payload?: Record<string, unknown>;
   artifacts?: Artifact[];
+  /** Scope this message to a specific Venue/Connection */
+  venueId?: string;
 }
 
 export interface Artifact {

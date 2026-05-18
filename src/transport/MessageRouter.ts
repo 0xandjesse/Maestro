@@ -27,6 +27,7 @@ const PROTOCOL_VERSION = '3.2';
 
 export class MessageRouter extends EventEmitter {
   private handlers = new Map<string, Set<MessageHandler>>();
+  private venueHandlers = new Map<string, Map<string, Set<MessageHandler>>>();
   private connectionManager: ConnectionManager;
   private agentId: string;
 
@@ -63,6 +64,31 @@ export class MessageRouter extends EventEmitter {
     return this;
   }
 
+  /**
+   * Register a handler scoped to a specific Venue/Connection.
+   * Only receives messages whose venueId matches.
+   */
+  onVenue(venueId: string, type: MessageType | '*', handler: MessageHandler): this {
+    if (!this.venueHandlers.has(venueId)) {
+      this.venueHandlers.set(venueId, new Map());
+    }
+    const venueMap = this.venueHandlers.get(venueId)!;
+    const key = String(type);
+    if (!venueMap.has(key)) {
+      venueMap.set(key, new Set());
+    }
+    venueMap.get(key)!.add(handler);
+    return this;
+  }
+
+  offVenue(venueId: string, type: MessageType | '*', handler: MessageHandler): this {
+    const venueMap = this.venueHandlers.get(venueId);
+    if (venueMap) {
+      venueMap.get(String(type))?.delete(handler);
+    }
+    return this;
+  }
+
   // ----------------------------------------------------------
   // Inbound
   // ----------------------------------------------------------
@@ -83,11 +109,30 @@ export class MessageRouter extends EventEmitter {
       }
     }
 
-    // Dispatch to type-specific handlers
-    const typeHandlers = this.handlers.get(message.type) ?? new Set();
-    const wildcardHandlers = this.handlers.get('*') ?? new Set();
+    let all: MessageHandler[] = [];
 
-    const all = [...typeHandlers, ...wildcardHandlers];
+    if (message.venueId) {
+      // Scoped to a specific venue: only deliver to venue-specific handlers
+      const venueMap = this.venueHandlers.get(message.venueId);
+      if (venueMap) {
+        const typeHandlers = venueMap.get(message.type) ?? new Set();
+        const wildcardHandlers = venueMap.get('*') ?? new Set();
+        all = [...typeHandlers, ...wildcardHandlers];
+      }
+      // If no venue-specific handlers registered, fall through to global handlers
+      // to maintain backward compatibility for agents that haven't adopted per-venue handlers
+      if (all.length === 0) {
+        const typeHandlers = this.handlers.get(message.type) ?? new Set();
+        const wildcardHandlers = this.handlers.get('*') ?? new Set();
+        all = [...typeHandlers, ...wildcardHandlers];
+      }
+    } else {
+      // No venueId: broadcast to all global handlers (backward compat)
+      const typeHandlers = this.handlers.get(message.type) ?? new Set();
+      const wildcardHandlers = this.handlers.get('*') ?? new Set();
+      all = [...typeHandlers, ...wildcardHandlers];
+    }
+
     await Promise.all(all.map(h => h(message)));
 
     // Also emit as an EventEmitter event for venue.on() usage
@@ -123,6 +168,7 @@ export class MessageRouter extends EventEmitter {
       timestamp: Date.now(),
       version: PROTOCOL_VERSION,
       ...(options.stageId ? { stageId: options.stageId } : {}),
+      ...(options.venueId ? { venueId: options.venueId } : {}),
       ...(options.replyTo ? { replyTo: options.replyTo } : {}),
       ...(options.provenance ? { provenance: options.provenance } : {}),
     };

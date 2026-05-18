@@ -155,6 +155,31 @@ export class ConnectionHandle {
     });
   }
 
+  /**
+   * Send a message to an agent in a DIFFERENT Venue.
+   * Useful when Agent A in Venue X needs Agent B's input from Venue Y.
+   */
+  async crossVenueSend(
+    recipientId: string,
+    content: string,
+    targetVenueId: string,
+    options: SendOptions = {},
+  ): Promise<MaestroMessage> {
+    this.requirePermission('message:send');
+    const message = this.maestro.router.buildMessage('direct', content, recipientId, {
+      ...options,
+      venueId: targetVenueId,
+      stageId: this.connectionId,
+    });
+    // Deliver via transport if available
+    if (this.maestro.httpTransport) {
+      await this.maestro.httpTransport.send(message).catch((err: unknown) => {
+        console.error('[ConnectionHandle] crossVenueSend transport error:', err);
+      });
+    }
+    return message;
+  }
+
   // ----------------------------------------------------------
   // Message handling
   // ----------------------------------------------------------
@@ -495,6 +520,35 @@ export class Maestro {
   /** Dispatch an inbound message (called by webhook receiver) */
   async receive(message: MaestroMessage): Promise<{ accepted: boolean; reason?: string }> {
     return this.router.dispatch(message);
+  }
+
+  /**
+   * Route an incoming message to the correct Connection handle.
+   * Uses message.venueId if present. Falls back to the only handle if there's just one.
+   * Returns undefined when multiple handles + no venueId (broadcast to all).
+   */
+  private _routeToConnection(message: MaestroMessage): ConnectionHandle | undefined {
+    if (message.venueId) {
+      return this.connectionHandles.get(message.venueId);
+    }
+    // Fallback: if only one handle, use it
+    if (this.connectionHandles.size === 1) {
+      return this.connectionHandles.values().next().value;
+    }
+    // Multiple handles, no venueId — broadcast to all
+    return undefined;
+  }
+
+  /**
+   * Register a handler for messages in a specific Connection only.
+   * Different from global onMessage() which fires for all Connections.
+   */
+  onConnectionMessage(
+    connectionId: string,
+    type: MessageType | '*',
+    handler: MessageHandler,
+  ): void {
+    this.router.onVenue(connectionId, type, handler);
   }
 
   // ----------------------------------------------------------
