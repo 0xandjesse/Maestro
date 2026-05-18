@@ -33,7 +33,8 @@ def _generate_item_id(items: list) -> str:
 
 def create_checklist(created_by: str, assigned_to: str, title: str, items: list,
                      require_artifacts: bool = False, checkin_interval_min: int = 30,
-                     parent_checklist_id: str = None) -> str:
+                     parent_checklist_id: str = None,
+                     notify_on_all_items: str = None) -> str:
     """
     Create a new checklist and return its ID.
     items: list of plain-string descriptions (converted to full item dicts).
@@ -74,6 +75,7 @@ def create_checklist(created_by: str, assigned_to: str, title: str, items: list,
         "parent_checklist_id": parent_checklist_id,
         "require_artifacts": bool(require_artifacts),
         "checkin_interval_min": int(checkin_interval_min),
+        "notify_on_all_items": notify_on_all_items,
         "status": "active",
         "completed_at": None,
         "last_ping_at": None,
