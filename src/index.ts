@@ -6,6 +6,7 @@
 export type {
   AgentIdentity,
   AttestationLink,
+  ContactCard,
   LocRCredential,
   MaestroMessage,
   MessageType,

@@ -49,6 +49,7 @@ export interface CreateConnectionResult {
 export class ConnectionBroker {
   constructor(
     private agentId: string,
+    private wallet: string | undefined,
     private transport: HttpTransport,
     private registry: LocalRegistry,
     private connectionManager: ConnectionManager,
@@ -108,7 +109,7 @@ export class ConnectionBroker {
         id:        randomUUID(),
         type:      'connection:invitation' as const,
         content:   `You are invited to join "${options.name}"`,
-        sender:    { agentId: this.agentId },
+        sender:    { agentId: this.agentId, wallet: this.wallet },
         recipient: memberId,
         connectionId: connection.id,
         timestamp: Date.now(),

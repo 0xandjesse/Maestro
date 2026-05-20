@@ -8,6 +8,7 @@
 
 export interface AgentIdentity {
   agentId: string;
+  /** Global network identity — wallet address. This is the UID. */
   wallet?: string;
   /** Optional LOCR credential binding */
   identityProof?: LocRCredential;
@@ -21,8 +22,23 @@ export interface LocRCredential {
 }
 
 // ----------------------------------------------------------
-// Attestation Links
+// Contact Card (for non-local identity exchange)
 // ----------------------------------------------------------
+
+export interface ContactCard {
+  /** Global network identity — wallet address. This is the UID. */
+  walletAddress: string;
+  /** Human-readable name */
+  friendlyName: string;
+  /** Base HTTP endpoint for this agent (e.g. http://host:port) */
+  endpoint: string;
+  /** Protocol capabilities this agent advertises */
+  capabilities: string[];
+  /** Ed25519 public key (hex) for signature verification */
+  publicKey?: string;
+  /** Unix epoch ms when this card was generated */
+  issuedAt: number;
+}
 
 export interface AttestationLink {
   /** agentId of the sender */

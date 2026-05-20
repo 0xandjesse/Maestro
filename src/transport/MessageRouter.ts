@@ -30,10 +30,12 @@ export class MessageRouter extends EventEmitter {
   private venueHandlers = new Map<string, Map<string, Set<MessageHandler>>>();
   private connectionManager: ConnectionManager;
   private agentId: string;
+  private wallet: string | undefined;
 
-  constructor(agentId: string, connectionManager: ConnectionManager) {
+  constructor(agentId: string, connectionManager: ConnectionManager, wallet?: string) {
     super();
     this.agentId = agentId;
+    this.wallet = wallet;
     this.connectionManager = connectionManager;
   }
 
@@ -127,10 +129,26 @@ export class MessageRouter extends EventEmitter {
         all = [...typeHandlers, ...wildcardHandlers];
       }
     } else {
-      // No venueId: broadcast to all global handlers (backward compat)
-      const typeHandlers = this.handlers.get(message.type) ?? new Set();
-      const wildcardHandlers = this.handlers.get('*') ?? new Set();
-      all = [...typeHandlers, ...wildcardHandlers];
+      // No venueId: only deliver to handlers explicitly registered for
+      // broadcast messages.  Messages without a venueId used to fan out to
+      // ALL global handlers of that type, which caused duplicate delivery
+      // for direct messages.  Now we only broadcast when the message type
+      // is explicitly 'broadcast' or when a wildcard handler has opted in.
+      //
+      // Rationale: a direct or report message without a venueId is addressed
+      // to a specific recipient — it should not explode to every handler.
+      // Only 'broadcast' messages carry implicit fan-out semantics.
+      if (message.type === 'broadcast' || message.recipient === '*') {
+        // Legitimate broadcast — fan out to all global handlers
+        const typeHandlers = this.handlers.get(message.type) ?? new Set();
+        const wildcardHandlers = this.handlers.get('*') ?? new Set();
+        all = [...typeHandlers, ...wildcardHandlers];
+      } else {
+        // Point-to-point without venueId: deliver only to type-specific
+        // handlers (not wildcards).  Wildcard handlers receive broadcasts
+        // via the path above.
+        all = [...(this.handlers.get(message.type) ?? new Set())];
+      }
     }
 
     await Promise.all(all.map(h => h(message)));
@@ -163,7 +181,7 @@ export class MessageRouter extends EventEmitter {
       id: randomUUID(),
       type,
       content,
-      sender: { agentId: this.agentId },
+      sender: { agentId: this.agentId, wallet: this.wallet },
       recipient,
       timestamp: Date.now(),
       version: PROTOCOL_VERSION,

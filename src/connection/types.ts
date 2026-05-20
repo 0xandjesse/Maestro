@@ -92,6 +92,15 @@ export interface JoinRequest {
   capabilities?: string[];
   webhookEndpoint: string;
   inviteToken?: string;
+  /** Contact card of the joining agent (for non-local identity exchange) */
+  contactCard?: {
+    walletAddress: string;
+    friendlyName: string;
+    endpoint: string;
+    capabilities: string[];
+    publicKey?: string;
+    issuedAt: number;
+  };
 }
 
 export type JoinStatus = 'accepted' | 'pending' | 'rejected';
@@ -111,6 +120,15 @@ export interface JoinResponse {
   };
   members?: ConnectionMember[];
   rules?: ConnectionRules;
+  /** Host's contact card for non-local identity verification */
+  hostContactCard?: {
+    walletAddress: string;
+    friendlyName: string;
+    endpoint: string;
+    capabilities: string[];
+    publicKey?: string;
+    issuedAt: number;
+  };
   requestId?: string;  // For pending status
   reason?: string;     // For rejected status
 }

@@ -258,6 +258,8 @@ export class ConnectionHandle {
 
 export class Maestro {
   readonly agentId: string;
+  /** Global network identity — wallet address. This is the UID. */
+  readonly wallet?: string;
   readonly connectionManager: ConnectionManager;
   readonly router: MessageRouter;
 
@@ -278,8 +280,9 @@ export class Maestro {
   constructor(config: MaestroConfig) {
     this.config = config;
     this.agentId = config.agentId;
+    this.wallet = config.wallet;
     this.connectionManager = new ConnectionManager();
-    this.router = new MessageRouter(config.agentId, this.connectionManager);
+    this.router = new MessageRouter(config.agentId, this.connectionManager, this.wallet);
   }
 
   // ----------------------------------------------------------
@@ -336,11 +339,22 @@ export class Maestro {
       );
       this.connectionBroker = new ConnectionBroker(
         this.agentId,
+        this.wallet,
         this.httpTransport,
         this.registry,
         this.connectionManager,
         { localPort: port },
       );
+
+      // Set the host contact card on the ConnectionManager for non-local handshakes
+      this.connectionManager.setHostContactCard({
+        walletAddress: this.wallet ?? this.agentId,
+        friendlyName: this.agentId,
+        endpoint: `http://127.0.0.1:${port}`,
+        capabilities: this.config.capabilities ?? [],
+        publicKey: this.config.publicKey,
+        issuedAt: Date.now(),
+      });
 
       // Wire BlackboardBridge for cross-process push
       this.blackboardBridge = new BlackboardBridge(
@@ -465,6 +479,14 @@ export class Maestro {
       },
       webhookEndpoint: `http://localhost:${this.config.webhookPort ?? 3001}/maestro/webhook`,
       capabilities: [],
+      contactCard: {
+        walletAddress: this.wallet ?? this.agentId,
+        friendlyName: this.config.agentId,
+        endpoint: `http://localhost:${this.config.webhookPort ?? 3001}`,
+        capabilities: this.config.capabilities ?? [],
+        publicKey: this.config.publicKey,
+        issuedAt: Date.now(),
+      },
       ...options,
     };
 
@@ -480,6 +502,10 @@ export class Maestro {
           // Store reference - use the host's ConnectionManager for all connection ops
           this._sharedManagers.set(connectionId, hostManager);
         }
+      }
+      // Store host contact card if provided
+      if (response.hostContactCard) {
+        this.connectionManager.setHostContactCard(response.hostContactCard);
       }
       this.makeHandle(connectionId, hostManager);
     }
