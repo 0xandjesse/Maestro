@@ -18,6 +18,7 @@ Provides CLI read API used by `maestro status`.
 import json
 import os
 import platform
+import signal
 import socket
 import subprocess
 import time
@@ -98,7 +99,7 @@ def check_port_conflict(port: int, agent_id: str) -> Optional[str]:
     return None
 
 
-def register_agent(agent_id: str, port: int, profile: str, pid: int = None) -> None:
+def register_agent(agent_id: str, port: int, profile: str, pid: int = None, session_key: str = None) -> None:
     """Register this agent in the authoritative registry."""
     reg = _load_registry()
     reg.setdefault("agents", {})
@@ -108,6 +109,7 @@ def register_agent(agent_id: str, port: int, profile: str, pid: int = None) -> N
         "profile": profile,
         "started": datetime.now(timezone.utc).isoformat(),
         "status": AGENT_STATUS_HEALTHY,
+        "session_key": session_key or "",
     }
     reg["last_heartbeat"] = datetime.now(timezone.utc).isoformat()
     _save_registry(reg)
@@ -178,6 +180,58 @@ async def supervisor_heartbeat_task(
         except Exception as e:
             _require_logger().warning("Supervisor heartbeat error: %s", e)
             await asyncio.sleep(interval)
+
+
+def cleanup_orphans(agent_id: str = None) -> None:
+    """Walk registry and SIGTERM→SIGKILL all orphaned processes."""
+    reg = _load_registry()
+    removed = []
+    for aid, info in list(reg.get("agents", {}).items()):
+        if aid == agent_id:
+            continue
+        status = info.get("status", "")
+        pid = info.get("pid")
+        alive = False
+        if pid:
+            try:
+                os.kill(pid, 0)
+                alive = True
+            except (OSError, ProcessLookupError):
+                pass
+        if status == AGENT_STATUS_ORPHANED or (not alive and pid):
+            if alive and pid:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                    time.sleep(2)
+                    try:
+                        os.kill(pid, 0)
+                        os.kill(pid, signal.SIGKILL)
+                        time.sleep(0.5)
+                    except (OSError, ProcessLookupError):
+                        pass
+                except (OSError, ProcessLookupError):
+                    pass
+            removed.append({"agent_id": aid, "pid": pid, "status": status})
+            del reg["agents"][aid]
+    if removed:
+        _save_registry(reg)
+        _require_logger().warning("governed_orphan_cleanup: removed %d orphans", len(removed))
+        try:
+            import sys, pathlib
+            sys.path.insert(0, str(pathlib.Path(__file__).parent))
+            from audit_log import write as _audit_write, EVENT_GOVERNED_ORPHAN_CLEANUP
+            _audit_write(EVENT_GOVERNED_ORPHAN_CLEANUP, {"removed": removed})
+        except Exception:
+            pass
+
+
+def register_orphan_cleanup_handler() -> None:
+    """Register atexit handler for orphan cleanup. Best-effort only."""
+    try:
+        import atexit
+        atexit.register(cleanup_orphans, agent_id=None)
+    except Exception:
+        pass
 
 
 def resolve_agent_port_conflict(port: int, agent_id: str) -> Optional[str]:

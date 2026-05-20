@@ -201,6 +201,12 @@ class HermesClient:
             ) as resp:
                 if resp.status != 200:
                     log.error(f"Chat completions failed {resp.status}: {await resp.text()}")
+                    # ---- Audit log: transport.error (Phase 1, Priority 4) ----
+                    try:
+                        from .audit_log import write as _audit_write, EVENT_TRANSPORT_ERROR
+                        _audit_write(EVENT_TRANSPORT_ERROR, {"error_type": "api_failure", "status": resp.status, "endpoint": "chat/completions", "sender": self.agent_id})
+                    except Exception:
+                        pass
                     return None
                 data = await resp.json()
                 output = data.get("choices", [{}])[0].get("message", {}).get("content")
@@ -699,7 +705,14 @@ class MaestroTransport:
 
     async def handle_message(self, req):
         try: message = await req.json()
-        except: return web.json_response({"accepted": False, "reason": "Invalid JSON"}, status=400)
+        except:
+            # ---- Audit log: transport.error (Phase 1, Priority 4) ----
+            try:
+                from .audit_log import write as _audit_write, EVENT_TRANSPORT_ERROR
+                _audit_write(EVENT_TRANSPORT_ERROR, {"error_type": "invalid_json", "reason": "Invalid JSON body"})
+            except Exception:
+                pass
+            return web.json_response({"accepted": False, "reason": "Invalid JSON"}, status=400)
         if not message.get("id") or not message.get("type") or not message.get("sender"):
             return web.json_response({"accepted": False, "reason": "Invalid message format"}, status=400)
 
@@ -722,10 +735,30 @@ class MaestroTransport:
             nonce_ok, nonce_reason = self.nonce_set.check(nonce, ts, msg_type)
             if not nonce_ok:
                 log.warning(f"Replay/reject: nonce={nonce} from {sender}: {nonce_reason}")
+                # ---- Audit log: transport.error (Phase 1, Priority 4) ----
+                try:
+                    from .audit_log import write as _audit_write, EVENT_TRANSPORT_ERROR
+                    _audit_write(EVENT_TRANSPORT_ERROR, {"error_type": "nonce_reject", "nonce": nonce[:16] if nonce else "", "sender": sender, "reason": nonce_reason})
+                except Exception:
+                    pass
                 return web.json_response({"accepted": False, "reason": nonce_reason}, status=400)
 
         log.info(f"Inbound from {sender} type={msg_type}")
         self.logger.log(self.agent_id, "message_received", {"sender": sender, "type": msg_type, "msg_id": msg_id}, session_id=msg_id)
+
+        # ---- Audit log: transport.recv (Phase 1, Priority 4) ----
+        try:
+            from .audit_log import write as _audit_write, EVENT_TRANSPORT_RECV
+            _bytes = len(json.dumps(message, ensure_ascii=False).encode("utf-8"))
+            _audit_write(EVENT_TRANSPORT_RECV, {
+                "to_agent": getattr(self, "agent_id", None),
+                "from_agent": sender,
+                "message_id": msg_id,
+                "bytes": _bytes,
+            })
+        except Exception:
+            pass
+        # ---- end transport.recv ----
 
         # Write to work log before any processing
         self._write_work_log(message)
@@ -1000,8 +1033,40 @@ class MaestroTransport:
             try:
                 async with s.post(endpoint, json=message, timeout=ClientTimeout(total=10)) as resp:
                     log.debug(f"Deliver to {endpoint}: {resp.status}")
+                    # ---- Audit log: transport.send (success) ----
+                    try:
+                        from .audit_log import write as _audit_write, EVENT_TRANSPORT_SEND
+                        _payload = message if isinstance(message, dict) else {"content": str(message)}
+                        bytes_out = len(json.dumps(_payload, ensure_ascii=False).encode("utf-8"))
+                        _audit_write(EVENT_TRANSPORT_SEND, {
+                            "from_agent": getattr(self, "agent_id", None),
+                            "to_agent": endpoint,
+                            "message_id": message.get("id") if isinstance(message, dict) else None,
+                            "bytes": bytes_out,
+                            "success": True,
+                        })
+                    except Exception:
+                        pass
+                    # ---- end transport.send ----
             except Exception as e:
                 log.error(f"Deliver failed to {endpoint}: {type(e).__name__}: {e}")
+                # ---- Audit log: transport.send (error) ----
+                try:
+                    import asyncio as _asyncio
+                    from .audit_log import write as _audit_write, EVENT_TRANSPORT_SEND
+                    _payload = message if isinstance(message, dict) else {"content": str(message)}
+                    bytes_out = len(json.dumps(_payload, ensure_ascii=False).encode("utf-8"))
+                    _audit_write(EVENT_TRANSPORT_SEND, {
+                        "from_agent": getattr(self, "agent_id", None),
+                        "to_agent": endpoint,
+                        "message_id": message.get("id") if isinstance(message, dict) else None,
+                        "bytes": bytes_out,
+                        "success": False,
+                        "error_type": type(e).__name__,
+                    })
+                except Exception:
+                    pass
+                # ---- end transport.send ----
 
     async def _notify_loop_detected(self, sender_id: str, reason: str, content_preview: str):
         """Surface a loop detection warning to Jesse via the gateway bridge. Best-effort — never raises."""

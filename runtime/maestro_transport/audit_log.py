@@ -1,199 +1,156 @@
 """
-Audit log for Maestro transport.
+audit_log.py — Thread-safe JSONL audit logger with auto-rotation.
 
-Appends one JSONL line per event to ~/.maestro/audit.jsonl with:
-  - Thread-safe writes via fcntl.flock (inter-process safe)
-  - Auto-rotation at 100 MB, keeping up to 5 backups (.1 through .5)
-  - Never raises — all I/O errors are silently swallowed
-
-Schema per line:
-  {
-    "ts":          "2026-05-18T04:06:00.123Z",   # ISO 8601 UTC
-    "event_type":  "task_start",                  # caller-defined event category
-    "data":        { ... }                        # arbitrary JSON-serialisable payload
-  }
-
-Usage:
-    from audit_log import write
-
-    write("task_start", {"task_id": "abc", "agent": "proteus"})
-    write("message_sent", {"recipient": "stormtrooper", "payload_size": 2048})
+Appends JSONL entries to ~/.maestro/audit.jsonl with fcntl-based locking.
+Auto-rotates at 100MB, keeping up to 5 backups.
+Never raises — all errors are silently caught.
 """
 
 import fcntl
 import json
 import os
-import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-AUDIT_PATH = Path(os.getenv("MAESTRO_AUDIT_PATH", os.path.expanduser("~/.maestro/audit.jsonl")))
-MAX_FILE_BYTES = 100 * 1024 * 1024   # 100 MB
-MAX_BACKUPS = 5                        # keep .1 … .5
 
-# Module-level lock serialises threads *within* one process.
-_lock = threading.Lock()
-
-# ---------------------------------------------------------------------------
-# Event type constants (Tactical Hardening Phase 1, Priority 4)
-# ---------------------------------------------------------------------------
-EVENT_AGENT_START = "agent.start"
-EVENT_AGENT_STOP = "agent.stop"
-EVENT_EXECUTION_START = "execution.start"
-EVENT_EXECUTION_END = "execution.end"
+# --- Event type constants ---
+EVENT_TRANSPORT_RECV = "transport.recv"
+EVENT_TRANSPORT_SEND = "transport.send"
+EVENT_TRANSPORT_ERROR = "transport.error"
 EVENT_TOOL_CALL = "tool.call"
 EVENT_TOOL_RESULT = "tool.result"
-EVENT_KILL = "kill"
+EVENT_EXECUTION_START = "execution.start"
+EVENT_EXECUTION_END = "execution.end"
 EVENT_CAP_BREACH = "cap.breach"
-EVENT_TRANSPORT_SEND = "transport.send"
-EVENT_TRANSPORT_RECV = "transport.recv"
-EVENT_ERROR = "error"
+EVENT_AGENT_START = "agent.start"
+EVENT_AGENT_STOP = "agent.stop"
+EVENT_KILL = "agent.kill"
+EVENT_SESSION_ORPHAN = "session.orphan"
+EVENT_DISPATCH_BROADCAST = "dispatch.broadcast"
+EVENT_DISPATCH_TARGETED = "dispatch.targeted"
+EVENT_DISPATCH_SUPPRESSED = "dispatch.suppressed"
+EVENT_SUPERVISOR_KILL = "supervisor.kill"
+EVENT_GOVERNED_ORPHAN_CLEANUP = "governed.orphan_cleanup"
+EVENT_RETRY_BLOCKED = "retry.blocked"
+
+# --- Config ---
+MAX_FILE_BYTES = 100 * 1024 * 1024  # 100 MB
+MAX_BACKUPS = 5
+DEFAULT_LOG_NAME = "audit.jsonl"
 
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-def _ensure_dir(path: Path) -> None:
-    """Create parent directories if they don't exist."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+def _log_path() -> Path:
+    """Return the primary audit log path."""
+    return Path.home() / ".maestro" / DEFAULT_LOG_NAME
 
 
-def _rotate(path: Path) -> None:
-    """
-    Rotate the audit log when it exceeds MAX_FILE_BYTES.
+def _backup_paths(log_path: Path) -> list[Path]:
+    """Return ordered backup paths [1..MAX_BACKUPS], newest first."""
+    return [log_path.with_suffix(f".jsonl.{i}") for i in range(1, MAX_BACKUPS + 1)]
 
-    Keeps up to MAX_BACKUPS compressed-history files:
-        audit.jsonl      -> audit.jsonl.1
-        audit.jsonl.1    -> audit.jsonl.2
-        ...
-        audit.jsonl.5    -> deleted (if it exists)
+
+def _rotate(log_path: Path) -> None:
+    """Rotate log files: remove oldest, shift others up, move primary to .1.
+
+    Caller is responsible for holding the fcntl lock to prevent concurrent rotation.
     """
     try:
-        if not path.exists():
-            return
-        if path.stat().st_size < MAX_FILE_BYTES:
-            return
-    except OSError:
-        return
+        backups = _backup_paths(log_path)
 
-    # Delete the oldest backup (.5) to make room, then shift: .4->.5, .3->.4, .2->.3, .1->.2
-    oldest = path.parent / f"{path.name}.{MAX_BACKUPS}"
-    try:
-        if oldest.exists():
-            oldest.unlink()
-    except OSError:
+        # Remove the oldest backup if it exists
+        if backups[-1].exists():
+            backups[-1].unlink()
+
+        # Shift backups: .4 -> .5, .3 -> .4, .1 -> .2
+        for i in range(len(backups) - 1, 0, -1):
+            if backups[i - 1].exists():
+                backups[i - 1].replace(backups[i])
+
+        # Move primary to .1
+        if log_path.exists():
+            log_path.replace(backups[0])
+    except Exception:
+        # Never raise — rotation failure is non-fatal
         pass
 
-    for i in range(MAX_BACKUPS - 1, 0, -1):
-        src = path.parent / f"{path.name}.{i}"
-        dst = path.parent / f"{path.name}.{i + 1}"
-        try:
-            if src.exists():
-                src.rename(dst)
-        except OSError:
-            pass
-
-    # Main file -> .1
-    backup_1 = path.parent / f"{path.name}.1"
-    try:
-        if backup_1.exists():
-            backup_1.unlink()
-        path.rename(backup_1)
-    except OSError:
-        pass
-
-
-def _serialise(data: Any) -> Any:
-    """
-    Make *data* safe for json.dumps.
-    Falls back to str() for non-serialisable types so the log line
-    is always written even if the caller passes a weird object.
-    """
-    try:
-        json.dumps(data, ensure_ascii=False)
-        return data
-    except (TypeError, ValueError):
-        return str(data)
-
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 def write(event_type: str, data: Optional[Dict[str, Any]] = None) -> None:
     """
-    Append an audit event to the JSONL log.
+    Append a JSONL entry to the audit log.
 
-    Parameters
-    ----------
-    event_type : str
-        Category / name of the event (e.g. "task_start", "message_sent").
-    data : dict, optional
-        Arbitrary payload.  Keys are strings; values must be JSON-serialisable.
-        Non-serialisable values are coerced to strings.
+    - Thread-safe via fcntl.flock (POSIX advisory lock).
+    - Auto-rotates when the log exceeds 100 MB.
+    - Never raises — silently catches all errors.
 
-    Guarantees
-    ----------
-    * Thread-safe (threading.Lock + fcntl.flock).
-    * Never raises — all I/O errors are silently swallowed so the caller
-      never crashes because of audit logging.
-    * Auto-rotates the log file at 100 MB, keeping up to 5 backups.
+    Args:
+        event_type: A short string identifying the event (e.g. "message_sent").
+        data:       Optional dict of arbitrary JSON-serializable data.
     """
+    if data is None:
+        data = {}
+
+    now = datetime.now(timezone.utc)
     entry = {
-        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "ts": now.isoformat(),
+        "ts_unix": now.timestamp(),
         "event_type": event_type,
-        "data": _serialise(data) if data is not None else {},
+        "data": data,
     }
 
-    line: str
+    log_path = _log_path()
+
     try:
-        line = json.dumps(entry, ensure_ascii=False) + "\n"
-    except (TypeError, ValueError):
-        # Last resort: minimal log line so we never lose the event entirely.
-        line = json.dumps({
-            "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            "event_type": str(event_type),
-            "data": {},
-        }, ensure_ascii=False) + "\n"
+        # Ensure directory exists
+        log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with _lock:
+        # Open in append mode, acquire exclusive lock
+        fd = os.open(str(log_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
         try:
-            _ensure_dir(AUDIT_PATH)
-            _rotate(AUDIT_PATH)
+            fcntl.flock(fd, fcntl.LOCK_EX)
 
-            # Append with fcntl file-lock for inter-process safety.
-            with open(AUDIT_PATH, "a", encoding="utf-8") as f:
+            # Write the entry
+            line = json.dumps(entry, default=str, ensure_ascii=False) + "\n"
+            os.write(fd, line.encode("utf-8"))
+
+            # Check rotation while still holding the lock to prevent races
+            need_rotate = False
+            try:
+                st = os.fstat(fd)
+                if st.st_size >= MAX_FILE_BYTES:
+                    need_rotate = True
+            except Exception:
+                pass
+
+            # Unlock first — rotation renames the file and we must not hold
+            # the fd lock across rename because fcntl locks are tied to
+            # (inode, pid) and a rename changes the path but not the inode.
+            # Other threads opening the *new* file get a fresh inode/lock.
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+            fd = -1  # Mark closed so finally block doesn't double-close
+
+            if need_rotate:
+                _rotate(log_path)
+        finally:
+            if fd != -1:
                 try:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-                    f.write(line)
-                    f.flush()
-                    os.fsync(f.fileno())
-                finally:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-        except Exception:
-            # Never propagate — audit logging must not crash the caller.
-            pass
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                except Exception:
+                    pass
+                try:
+                    os.close(fd)
+                except Exception:
+                    pass
+    except Exception:
+        # Never raise — audit log failures must not propagate
+        pass
 
 
-# ---------------------------------------------------------------------------
-# Convenience: module-level __all__
-# ---------------------------------------------------------------------------
-__all__ = [
-    "write",
-    "EVENT_AGENT_START",
-    "EVENT_AGENT_STOP",
-    "EVENT_EXECUTION_START",
-    "EVENT_EXECUTION_END",
-    "EVENT_TOOL_CALL",
-    "EVENT_TOOL_RESULT",
-    "EVENT_KILL",
-    "EVENT_CAP_BREACH",
-    "EVENT_TRANSPORT_SEND",
-    "EVENT_TRANSPORT_RECV",
-    "EVENT_ERROR",
-]
+# --- Convenience ---
+if __name__ == "__main__":
+    # Quick smoke test
+    for i in range(5):
+        write("test_event", {"seq": i, "note": f"smoke test {i}"})
+    print(f"Wrote 5 test entries to {_log_path()}")
+    print(f"File size: {_log_path().stat().st_size} bytes")

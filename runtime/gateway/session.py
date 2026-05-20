@@ -12,6 +12,7 @@ import hashlib
 import logging
 import os
 import json
+import socket
 import threading
 import uuid
 from pathlib import Path
@@ -491,6 +492,14 @@ class SessionEntry:
     resume_reason: Optional[str] = None  # e.g. "restart_timeout"
     last_resume_marked_at: Optional[datetime] = None
 
+    # -- Session Recovery (Phase 1, Priority 5) --
+    # orphan_status: "", "valid", "orphaned", "reconnecting"
+    # Set by SessionValidator on startup.  Persisted to sessions.json.
+    orphan_status: str = ""  # noqa: F821 — initialized below
+    last_validated_at: Optional[datetime] = None
+    validation_failures: int = 0
+    last_validation_reason: Optional[str] = None
+
     def to_dict(self) -> Dict[str, Any]:
         result = {
             "session_key": self.session_key,
@@ -521,6 +530,11 @@ class SessionEntry:
             "was_auto_reset": self.was_auto_reset,
             "auto_reset_reason": self.auto_reset_reason,
             "reset_had_activity": self.reset_had_activity,
+            # Session Recovery fields
+            "orphan_status": self.orphan_status,
+            "last_validated_at": self.last_validated_at.isoformat() if self.last_validated_at else None,
+            "validation_failures": self.validation_failures,
+            "last_validation_reason": self.last_validation_reason,
         }
         if self.origin:
             result["origin"] = self.origin.to_dict()
@@ -547,7 +561,15 @@ class SessionEntry:
             except (TypeError, ValueError):
                 last_resume_marked_at = None
 
-        return cls(
+        last_validated_at = None
+        _lva = data.get("last_validated_at")
+        if _lva:
+            try:
+                last_validated_at = datetime.fromisoformat(_lva)
+            except (TypeError, ValueError):
+                last_validated_at = None
+
+        entry = cls(
             session_key=data["session_key"],
             session_id=data["session_id"],
             created_at=datetime.fromisoformat(data["created_at"]),
@@ -574,6 +596,12 @@ class SessionEntry:
             auto_reset_reason=data.get("auto_reset_reason"),
             reset_had_activity=data.get("reset_had_activity", False),
         )
+        # Restore Session Recovery fields (new in Phase 1.5)
+        entry.orphan_status = data.get("orphan_status", "")
+        entry.last_validated_at = last_validated_at
+        entry.validation_failures = data.get("validation_failures", 0)
+        entry.last_validation_reason = data.get("last_validation_reason")
+        return entry
 
 
 def is_shared_multi_user_session(
@@ -1358,6 +1386,128 @@ class SessionStore:
             return jsonl_messages
 
         return db_messages
+
+
+# ---------------------------------------------------------------------------
+# Session Recovery — validation + orphan detection (Phase 1, Priority 5)
+# ---------------------------------------------------------------------------
+
+def _pid_alive(pid: int) -> bool:
+    """Return True if a process with *pid* exists and we can signal it."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def _port_reachable(port: int, host: str = "127.0.0.1", timeout: float = 2.0) -> bool:
+    """Return True if a TCP listener is accepting on *host:port*."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(timeout)
+            s.connect((host, port))
+            return True
+    except (OSError, socket.timeout, ConnectionRefusedError):
+        return False
+
+
+def _find_alive_agent(entries: List[SessionEntry], reg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Find a healthy, alive agent in the registry.
+
+    Returns the first agent where status != 'orphaned' and PID is alive.
+    In multi-agent deployments this would match by profile/platform.
+    """
+    for _aid, ainfo in reg.get("agents", {}).items():
+        if ainfo.get("status") == "orphaned":
+            continue
+        try:
+            pid = int(ainfo.get("pid", 0))
+            if pid and _pid_alive(pid):
+                return ainfo
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+class SessionValidator:
+    """Validate sessions on startup.  No auto-resurrect of bad state.
+
+    Checks:
+      1. Is the owning agent PID still alive?
+      2. Is the agent's transport port reachable?
+    """
+
+    def __init__(self, registry_path: Optional[Path] = None):
+        self.registry_path = registry_path or (Path.home() / ".maestro" / "registry.json")
+
+    def _load_registry(self) -> Dict[str, Any]:
+        if self.registry_path.exists():
+            try:
+                return json.loads(self.registry_path.read_text())
+            except Exception:
+                pass
+        return {}
+
+    def validate_session(self, entry: SessionEntry) -> str:
+        """Validate a single session entry.  Returns status string.
+
+        Statuses:
+          - "" (empty)     : not yet validated
+          - "valid"        : PID alive + port reachable
+          - "orphaned"     : PID dead or port unreachable
+          - "reconnecting" : valid but we are trying to reconnect (set externally)
+        """
+        if entry.origin is None:
+            entry.orphan_status = "orphaned"
+            entry.last_validation_reason = "origin missing"
+            entry.last_validated_at = _now()
+            entry.validation_failures += 1
+            return "orphaned"
+
+        reg = self._load_registry()
+        alive = _find_alive_agent([], reg)
+        if alive is None:
+            entry.orphan_status = "orphaned"
+            entry.last_validation_reason = "no alive agent in registry"
+            entry.last_validated_at = _now()
+            entry.validation_failures += 1
+            return "orphaned"
+
+        agent_pid = alive.get("pid")
+        agent_port = alive.get("port")
+
+        if agent_pid and not _pid_alive(agent_pid):
+            entry.orphan_status = "orphaned"
+            entry.last_validation_reason = f"agent PID {agent_pid} not alive"
+            entry.last_validated_at = _now()
+            entry.validation_failures += 1
+            return "orphaned"
+
+        if agent_port and not _port_reachable(agent_port):
+            entry.orphan_status = "orphaned"
+            entry.last_validation_reason = f"agent port {agent_port} unreachable"
+            entry.last_validated_at = _now()
+            entry.validation_failures += 1
+            return "orphaned"
+
+        # All checks passed
+        entry.orphan_status = "valid"
+        entry.last_validation_reason = None
+        entry.last_validated_at = _now()
+        return "valid"
+
+    def validate_and_mark_all(self, entries: List[SessionEntry]) -> int:
+        """Iterate over entries, validate each, mark orphaned ones.
+
+        Returns the number of sessions marked orphaned.
+        """
+        orphaned_count = 0
+        for entry in entries:
+            status = self.validate_session(entry)
+            if status == "orphaned":
+                orphaned_count += 1
+        return orphaned_count
 
 
 def build_session_context(

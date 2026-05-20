@@ -1108,7 +1108,14 @@ class ExecutionCapsTracker:
 
     Instantiated once per ``run_conversation`` call. On any cap breach
     raises :class:`ExecutionCapBreach` with the violated limit details.
+
+    Caps are frozen after construction — runtime mutation is prohibited.
+    Counters are updated via the dedicated ``check()`` method only.
     """
+    __slots__ = ("max_iterations", "max_wall_clock_s", "max_tokens",
+                 "max_cost_cents", "wall_clock_start",
+                 "tokens_used", "cost_cents_used")
+
     def __init__(
         self,
         max_iterations: int = _DEFAULT_MAX_ITERATIONS,
@@ -1116,23 +1123,34 @@ class ExecutionCapsTracker:
         max_tokens: int = _DEFAULT_MAX_TOKEN_BUDGET,
         max_cost_cents: int = _DEFAULT_MAX_API_COST_CENTS,
     ):
-        self.max_iterations = max_iterations
-        self.max_wall_clock_s = max_wall_clock_s
-        self.max_tokens = max_tokens
-        self.max_cost_cents = max_cost_cents
-        self.wall_clock_start: float | None = None
-        self.tokens_used: int = 0
-        self.cost_cents_used: float = 0.0
+        object.__setattr__(self, "max_iterations", max_iterations)
+        object.__setattr__(self, "max_wall_clock_s", max_wall_clock_s)
+        object.__setattr__(self, "max_tokens", max_tokens)
+        object.__setattr__(self, "max_cost_cents", max_cost_cents)
+        object.__setattr__(self, "wall_clock_start", None)
+        object.__setattr__(self, "tokens_used", 0)
+        object.__setattr__(self, "cost_cents_used", 0.0)
+
+    def __setattr__(self, name, value):
+        raise AttributeError(
+            f"ExecutionCapsTracker is frozen. Cannot set {name}={value!r}"
+        )
+
+    def __delattr__(self, name):
+        raise AttributeError(
+            f"ExecutionCapsTracker is frozen. Cannot delete {name}"
+        )
 
     def mark_start(self):
         if self.wall_clock_start is None:
-            self.wall_clock_start = time.monotonic()
+            object.__setattr__(self, "wall_clock_start", time.monotonic())
 
     def check(self, iteration: int, delta_tokens: int = 0, delta_cost_cents: float = 0.0):
         """Return None when inside limits; raise ExecutionCapBreach on breach."""
         self.mark_start()
-        self.tokens_used += delta_tokens
-        self.cost_cents_used += delta_cost_cents
+        # Use object.__setattr__ because self is frozen (__setattr__ blocked)
+        object.__setattr__(self, "tokens_used", self.tokens_used + delta_tokens)
+        object.__setattr__(self, "cost_cents_used", self.cost_cents_used + delta_cost_cents)
 
         if self.max_iterations and iteration >= self.max_iterations:
             raise ExecutionCapBreach("iterations", self.max_iterations, iteration)
@@ -1154,6 +1172,43 @@ class ExecutionCapBreach(Exception):
         self.limit = limit
         self.actual = actual
         super().__init__(f"Execution cap breached: {cap_type} limit={limit}, actual={actual}")
+
+
+class CapsEnforcer:
+    """Immutable shell around ExecutionCapsTracker.
+
+    Owned by supervisor context — prevents the agent from mutating
+    caps via assignment.  Agent receives this object, not the raw tracker.
+    All counter updates go through the enclosed tracker. Caps themselves
+    are frozen after construction.
+    """
+    __slots__ = ("_caps",)
+
+    def __init__(self, caps: ExecutionCapsTracker):
+        self._caps = caps
+
+    @property
+    def max_iterations(self) -> int:
+        return self._caps.max_iterations
+
+    @property
+    def max_wall_clock_s(self) -> int:
+        return self._caps.max_wall_clock_s
+
+    @property
+    def max_tokens(self) -> int:
+        return self._caps.max_tokens
+
+    @property
+    def max_cost_cents(self) -> int:
+        return self._caps.max_cost_cents
+
+    def mark_start(self) -> None:
+        self._caps.mark_start()
+
+    def check(self, iteration: int, delta_tokens: int = 0, delta_cost_cents: float = 0.0):
+        return self._caps.check(iteration, delta_tokens, delta_cost_cents)
+
 
 class AIAgent:
     """
@@ -1295,11 +1350,14 @@ class AIAgent:
         """
         _install_safe_stdio()
         # Reset execution caps for this conversation
-        self.execution_caps = ExecutionCapsTracker(
-            max_iterations=cfg_get("agent.execution_caps.max_iterations", _DEFAULT_MAX_ITERATIONS),
-            max_wall_clock_s=cfg_get("agent.execution_caps.max_wall_clock_s", _DEFAULT_MAX_WALL_CLOCK_SECONDS),
-            max_tokens=cfg_get("agent.execution_caps.max_tokens", _DEFAULT_MAX_TOKEN_BUDGET),
-            max_cost_cents=cfg_get("agent.execution_caps.max_cost_cents", _DEFAULT_MAX_API_COST_CENTS),
+        # CapsEnforcer wraps the tracker — once created, caps are immutable.
+        self.execution_caps = CapsEnforcer(
+            ExecutionCapsTracker(
+                max_iterations=cfg_get("agent.execution_caps.max_iterations", _DEFAULT_MAX_ITERATIONS),
+                max_wall_clock_s=cfg_get("agent.execution_caps.max_wall_clock_s", _DEFAULT_MAX_WALL_CLOCK_SECONDS),
+                max_tokens=cfg_get("agent.execution_caps.max_tokens", _DEFAULT_MAX_TOKEN_BUDGET),
+                max_cost_cents=cfg_get("agent.execution_caps.max_cost_cents", _DEFAULT_MAX_API_COST_CENTS),
+            )
         )
         self._execution_caps_breached = False
         self.execution_caps.mark_start()

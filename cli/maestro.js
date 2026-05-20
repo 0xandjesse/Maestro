@@ -14,7 +14,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const COMMANDS = {
   init: { script: "init.js", description: "Set up your agent (wizard)" },
   status: { script: "status.js", description: "Show runtime registry and agent health" },
-  session: { script: "session.js", description: "List or recover sessions (list | recover <id>)" },
+  session: { script: "session.js", description: "List / validate / recover sessions (list | validate | recover <id>)" },
   secrets: { script: "secrets.js", description: "Backup / restore / list secrets" },
 };
 

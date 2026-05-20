@@ -115,5 +115,4 @@ export type {
   RoleTransferRequest,
   PermissionCheckResult,
 } from './connection/index.js';
-export { ConnectionManager, DEFAULT_PERMISSIONS, enforceProvenancePolicy } from './connection/index.js';
-export type { EnforcementResult } from './connection/index.js';
+export { ConnectionManager, DEFAULT_PERMISSIONS } from './connection/index.js';

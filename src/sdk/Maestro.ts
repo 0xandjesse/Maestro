@@ -36,12 +36,13 @@ import { ConnectionBroker, ConnectionBrokerConfig, ConnectionInvitation } from '
 import { ConnectionStore, StoredConnection } from '../transport/ConnectionStore.js';
 import { MdnsDiscovery } from '../transport/MdnsDiscovery.js';
 import { OpenClawAdapter } from '../plugin/OpenClawAdapter.js';
+import { verificationGate } from '../trust/VenueBouncer.js';
+import { BouncerResult } from '../trust/VenueBouncer.js';
 import {
   MaestroConfig,
   MessageHandler,
   SendOptions,
 } from '../transport/types.js';
-import { enforceProvenancePolicy } from '../connection/provenanceEnforcer.js';
 
 // ----------------------------------------------------------
 // ConnectionHandle - what agents interact with per-Connection
@@ -543,8 +544,23 @@ export class Maestro {
     this.router.on(type, handler);
   }
 
-  /** Dispatch an inbound message (called by webhook receiver) */
+  /** Dispatch an inbound message (called by webhook receiver).
+   *  If the message targets a Venue with a provenancePolicy, the Venue
+   *  Bouncer gate runs first. Messages that fail the gate are dropped. */
   async receive(message: MaestroMessage): Promise<{ accepted: boolean; reason?: string }> {
+    // Venue gate: if message has a venueId, check the Connection's provenance policy
+    if (message.venueId) {
+      const handle = this.connectionHandles.get(message.venueId);
+      if (handle) {
+        const connection = this.getManagerForConnection(message.venueId).get(message.venueId);
+        if (connection?.rules.provenancePolicy) {
+          const gate: BouncerResult = verificationGate(message, connection.rules.provenancePolicy);
+          if (!gate.allowed) {
+            return { accepted: false, reason: gate.reason ?? 'venue_policy_rejected' };
+          }
+        }
+      }
+    }
     return this.router.dispatch(message);
   }
 

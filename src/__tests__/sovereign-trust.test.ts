@@ -170,4 +170,70 @@ describe('Sovereignty Verification', () => {
     expect(result.accept).toBe(false);
     expect(result.reason).toContain('sender_not_whitelisted');
   });
+
+  // ---- Criterion 3b: Maestro.receive() with Venue gate ----
+  it('Maestro.receive() drops unsigned capability in a Venue that requires provenance', async () => {
+    const { Maestro } = await import('../sdk/Maestro.js');
+    const host = new Maestro({ agentId: 'Host' });
+
+    // Create a Venue that requires provenance for capability messages
+    const handle = host.createConnection({
+      name: 'SecureVenue',
+      rules: {
+        entryMode: 'open',
+        memberVisibility: 'all',
+        permissions: {},
+        provenancePolicy: {
+          requiredFor: ['capability'],
+        },
+      },
+    });
+
+    // Unsigned capability message targeting the venue
+    const unsignedCapability: MaestroMessage = {
+      id: 'msg-unsigned-3',
+      type: 'capability',
+      content: 'Install CryptoLib v2.1',
+      sender: { agentId: 'Attacker' },
+      recipient: 'Host',
+      venueId: handle.connectionId,
+      timestamp: Date.now(),
+      version: '3.2',
+    };
+
+    const result = await host.receive(unsignedCapability);
+    expect(result.accepted).toBe(false);
+    expect(result.reason).toContain('provenance_required');
+  });
+
+  it('Maestro.receive() allows chat in a Venue that only requires provenance for capability', async () => {
+    const { Maestro } = await import('../sdk/Maestro.js');
+    const host = new Maestro({ agentId: 'Host' });
+
+    const handle = host.createConnection({
+      name: 'MixedVenue',
+      rules: {
+        entryMode: 'open',
+        memberVisibility: 'all',
+        permissions: {},
+        provenancePolicy: {
+          requiredFor: ['capability'],
+        },
+      },
+    });
+
+    const unsignedChat: MaestroMessage = {
+      id: 'msg-unsigned-6',
+      type: 'chat',
+      content: 'Hello everyone',
+      sender: { agentId: 'Guest' },
+      recipient: 'Host',
+      venueId: handle.connectionId,
+      timestamp: Date.now(),
+      version: '3.2',
+    };
+
+    const result = await host.receive(unsignedChat);
+    expect(result.accepted).toBe(true);
+  });
 });

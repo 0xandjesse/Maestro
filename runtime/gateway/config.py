@@ -681,7 +681,29 @@ def load_gateway_config() -> GatewayConfig:
     2. ~/.hermes/config.yaml (primary user-facing config)
     3. ~/.hermes/gateway.json (legacy — provides defaults under config.yaml)
     4. Built-in defaults
+
+    Also injects ~/.maestro/secrets.env into os.environ so the gateway
+    picks up centralized secrets (Phase 1, Priority 6).  Secrets.env
+    values override any profile-specific .env values.
     """
+    # --- Load centralized secrets (single source of truth) ---
+    _maestro_secrets = Path.home() / ".maestro" / "secrets.env"
+    if _maestro_secrets.exists():
+        try:
+            with open(_maestro_secrets, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, _, value = line.partition("=")
+                    key = key.strip()
+                    value = value.strip().strip('"\'')
+                    if key:
+                        os.environ[key] = value
+        except Exception as e:
+            logger.debug("Failed to load centralized secrets.env: %s", e)
+    # --- end secrets load ---
+
     _home = get_hermes_home()
     gw_data: dict = {}
 
