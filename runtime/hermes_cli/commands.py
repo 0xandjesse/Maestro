@@ -161,6 +161,10 @@ COMMAND_REGISTRY: list[CommandDef] = [
                gateway_only=True),
     CommandDef("maestroout", "Toggle Maestro outbound reply mirroring to this chat", "Configuration",
                gateway_only=True),
+    CommandDef("checkliston", "Enable full checklist audit mode (detailed updates)", "Configuration",
+               gateway_only=True),
+    CommandDef("checklistoff", "Enable checklist heartbeat mode (minimal updates only)", "Configuration",
+               gateway_only=True),
 
     # Tools & Skills
     CommandDef("tools", "Manage tools: /tools [list|disable|enable] [name...]", "Tools & Skills",
