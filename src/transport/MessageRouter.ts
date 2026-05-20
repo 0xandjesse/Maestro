@@ -16,7 +16,6 @@ import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import { MaestroMessage, MessageType } from '../types/index.js';
 import { ConnectionManager } from '../connection/ConnectionManager.js';
-import { enforceProvenancePolicy } from '../connection/provenanceEnforcer.js';
 import { MessageHandler, SendOptions } from './types.js';
 
 const PROTOCOL_VERSION = '3.2';
@@ -100,17 +99,8 @@ export class MessageRouter extends EventEmitter {
    * Enforces Venue provenance policy before dispatch.
    */
   async dispatch(message: MaestroMessage): Promise<{ accepted: boolean; reason?: string }> {
-    // Check Connection provenance policy if applicable
-    if (message.stageId) {
-      const connection = this.connectionManager.get(message.stageId);
-      if (connection?.rules.provenancePolicy) {
-        const check = enforceProvenancePolicy(message, connection.rules.provenancePolicy);
-        if (!check.accepted) {
-          return { accepted: false, reason: check.reason };
-        }
-      }
-    }
-
+    // The protocol pipe is neutral — no signature/provenance checks here.
+    // Trust is enforced at the Agent (TrustPolicy) and Venue (verification_gate) layers.
     let all: MessageHandler[] = [];
 
     if (message.venueId) {
@@ -175,9 +165,9 @@ export class MessageRouter extends EventEmitter {
     type: MessageType,
     content: string,
     recipient: string,
-    options: SendOptions & { stageId?: string; provenance?: MaestroMessage['provenance'] } = {},
+    options: SendOptions & { stageId?: string; provenance?: import('../types/index.js').Provenance } = {},
   ): MaestroMessage {
-    return {
+    const msg: MaestroMessage = {
       id: randomUUID(),
       type,
       content,
@@ -188,8 +178,11 @@ export class MessageRouter extends EventEmitter {
       ...(options.stageId ? { stageId: options.stageId } : {}),
       ...(options.venueId ? { venueId: options.venueId } : {}),
       ...(options.replyTo ? { replyTo: options.replyTo } : {}),
-      ...(options.provenance ? { provenance: options.provenance } : {}),
     };
+    if (options.provenance) {
+      msg.extensions = { ...(msg.extensions ?? {}), provenance: options.provenance };
+    }
+    return msg;
   }
 
   /**

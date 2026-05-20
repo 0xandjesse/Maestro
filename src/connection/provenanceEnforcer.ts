@@ -6,8 +6,8 @@
 // MaestroMessage. This sits at L1 (Connection rules), not L0.
 // ============================================================
 
-import { MaestroMessage, ProvenanceMode } from '../types/index.js';
-import { ProvenancePolicy } from '../types/index.js';
+import { MaestroMessage, ProvenanceMode, ProvenancePolicy } from '../types/index.js';
+import { getProvenanceExtension } from '../extensions/index.js';
 
 const MODE_RANK: Record<ProvenanceMode, number> = {
   'full': 4,
@@ -31,22 +31,22 @@ export function enforceProvenancePolicy(
   message: MaestroMessage,
   policy: ProvenancePolicy,
 ): EnforcementResult {
+  const provenance = getProvenanceExtension(message);
+
   // Is provenance required for this message type?
   const requiresProvenance = policy.requiredFor?.includes(message.type);
 
-  if (requiresProvenance && !message.provenance) {
+  if (requiresProvenance && !provenance) {
     return {
       accepted: false,
-      reason: `provenance_required_for_${message.type}`,
+      reason: `ProvenanceRequired: provenance_required_for_${message.type}`,
     };
   }
 
-  if (!message.provenance) {
+  if (!provenance) {
     // Provenance not required and not present - accepted
     return { accepted: true };
   }
-
-  const provenance = message.provenance;
 
   // Full chain required for certain types?
   if (policy.requireFullChainFor?.includes(message.type) && provenance.mode !== 'full') {

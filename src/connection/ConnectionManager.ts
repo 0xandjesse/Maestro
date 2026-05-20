@@ -57,6 +57,26 @@ export const DEFAULT_PERMISSIONS: Record<string, Permission[]> = {
 
 export class ConnectionManager {
   private connections = new Map<string, Connection>();
+  /** Contact cards received from remote agents keyed by agentId */
+  private contactCards = new Map<string, JoinRequest['contactCard']>();
+  /** This host's own contact card (set externally by Maestro) */
+  private hostContactCard?: JoinResponse['hostContactCard'];
+
+  // ----------------------------------------------------------
+  // Contact Card Management
+  // ----------------------------------------------------------
+
+  setHostContactCard(card: JoinResponse['hostContactCard']): void {
+    this.hostContactCard = card;
+  }
+
+  getHostContactCard(): JoinResponse['hostContactCard'] | undefined {
+    return this.hostContactCard;
+  }
+
+  getContactCard(agentId: string): JoinRequest['contactCard'] | undefined {
+    return this.contactCards.get(agentId);
+  }
 
   // ----------------------------------------------------------
   // Create
@@ -170,6 +190,11 @@ export class ConnectionManager {
 
     const supervisor = this.getSupervisor(connection, request.agentId);
 
+    // Store contact card if provided
+    if (request.contactCard) {
+      this.contactCards.set(request.agentId, request.contactCard);
+    }
+
     return {
       status: 'accepted',
       connectionId: connection.id,
@@ -179,6 +204,7 @@ export class ConnectionManager {
       supervisorId: supervisor?.agentId,
       members: this.visibleMembers(connection, request.agentId),
       rules: connection.rules,
+      hostContactCard: this.hostContactCard,
     };
   }
 
