@@ -1524,6 +1524,27 @@ class GatewayRunner:
         if agent_id not in data:
             data[agent_id] = {"in": False, "out": False}
         data[agent_id][key] = bool(value)
+        # /maestroin ON/OFF also controls full-mode display so the bridge
+        # knows whether to render content or header-only.
+        if key == "in":
+            data[agent_id]["full"] = bool(value)
+        try:
+            self._MAESTRO_VISIBILITY_PATH.parent.mkdir(parents=True, exist_ok=True)
+            self._MAESTRO_VISIBILITY_PATH.write_text(json.dumps(data, indent=2))
+        except OSError as e:
+            logger.warning("Failed to save maestro visibility: %s", e)
+        return data[agent_id]
+
+    def _set_maestro_mode(self, agent_id: str, mode: str) -> dict:
+        """Set the Maestro visibility mode (full | short | off) for an agent. Returns the new state dict."""
+        VALID_MODES = {"full", "short", "off"}
+        if mode not in VALID_MODES:
+            logger.warning(f"Invalid maestro mode '{mode}' — must be one of {VALID_MODES}")
+            return self._get_maestro_visibility(agent_id)
+        data = self._load_maestro_visibility()
+        if agent_id not in data:
+            data[agent_id] = {}
+        data[agent_id]["mode"] = mode
         try:
             self._MAESTRO_VISIBILITY_PATH.parent.mkdir(parents=True, exist_ok=True)
             self._MAESTRO_VISIBILITY_PATH.write_text(json.dumps(data, indent=2))
@@ -6294,11 +6315,13 @@ class GatewayRunner:
                 if _cmd_def_inner.name == "footer":
                     return await self._handle_footer_command(event)
 
-            if _cmd_def_inner and _cmd_def_inner.name == "maestroin":
-                return await self._handle_maestroin_command(event)
-
-            if _cmd_def_inner and _cmd_def_inner.name == "maestroout":
-                return await self._handle_maestroout_command(event)
+            if _cmd_def_inner and _cmd_def_inner.name in {"maestrofull", "maestroshort", "maestrooff"}:
+                if _cmd_def_inner.name == "maestrofull":
+                    return await self._handle_maestrofull_command(event)
+                if _cmd_def_inner.name == "maestroshort":
+                    return await self._handle_maestroshort_command(event)
+                if _cmd_def_inner.name == "maestrooff":
+                    return await self._handle_maestrooff_command(event)
 
             if _cmd_def_inner and _cmd_def_inner.name == "checkliston":
                 return await self._handle_checkliston_command(event)
@@ -6678,11 +6701,14 @@ class GatewayRunner:
         if canonical == "subgoal":
             return await self._handle_subgoal_command(event)
 
-        if canonical == "maestroin":
-            return await self._handle_maestroin_command(event)
+        if canonical == "maestrofull":
+            return await self._handle_maestrofull_command(event)
 
-        if canonical == "maestroout":
-            return await self._handle_maestroout_command(event)
+        if canonical == "maestroshort":
+            return await self._handle_maestroshort_command(event)
+
+        if canonical == "maestrooff":
+            return await self._handle_maestrooff_command(event)
 
         if canonical == "checkliston":
             return await self._handle_checkliston_command(event)
@@ -9927,23 +9953,23 @@ class GatewayRunner:
             return "No memory files found for any agent. Run the summarization cron first."
         return "\n\n".join(sections)
 
-    async def _handle_maestroin_command(self, event: "MessageEvent") -> str:
-        """Handle /maestroin — toggle Maestro inbound message display."""
+    async def _handle_maestrofull_command(self, event: "MessageEvent") -> str:
+        """Handle /maestrofull — show send/receive info + full content."""
         profile = self._active_profile_name()
-        current = self._get_maestro_visibility(profile)
-        new_val = not current.get("in", False)
-        state = self._set_maestro_visibility(profile, "in", new_val)
-        status = "ON" if state["in"] else "OFF"
-        return f"Maestro inbound display: {status}"
+        state = self._set_maestro_mode(profile, "full")
+        return "📬 Maestro FULL mode ON — all content visible."
 
-    async def _handle_maestroout_command(self, event: "MessageEvent") -> str:
-        """Handle /maestroout — toggle Maestro outbound reply mirroring."""
+    async def _handle_maestroshort_command(self, event: "MessageEvent") -> str:
+        """Handle /maestroshort — show send/receive info + subject only."""
         profile = self._active_profile_name()
-        current = self._get_maestro_visibility(profile)
-        new_val = not current.get("out", False)
-        state = self._set_maestro_visibility(profile, "out", new_val)
-        status = "ON" if state["out"] else "OFF"
-        return f"Maestro outbound display: {status}"
+        state = self._set_maestro_mode(profile, "short")
+        return "📨 Maestro SHORT mode ON — subject only."
+
+    async def _handle_maestrooff_command(self, event: "MessageEvent") -> str:
+        """Handle /maestrooff — no Maestro notifications at all."""
+        profile = self._active_profile_name()
+        state = self._set_maestro_mode(profile, "off")
+        return "🔇 Maestro OFF — no notifications."
 
     async def _handle_checkliston_command(self, event: "MessageEvent") -> str:
         """Handle /checkliston — enable full checklist audit mode."""
