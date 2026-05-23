@@ -1,0 +1,17 @@
+diff --git a/hermes_cli/gateway.py b/hermes_cli/gateway.py
+index b0cb579da..2618f3140 100644
+--- a/hermes_cli/gateway.py
++++ b/hermes_cli/gateway.py
+@@ -1305,6 +1305,12 @@ def _profile_arg(hermes_home: str | None = None) -> str:
+         rel = home.relative_to(profiles_root)
+         parts = rel.parts
+         if len(parts) == 1 and re.match(r"^[a-z0-9][a-z0-9_-]{0,63}$", parts[0]):
++            # The CLI entrypoint rejects "hermes" as a reserved profile name,
++            # but HERMES_HOME is already set in the systemd unit, so we can
++            # omit the --profile flag for that one profile and let the env
++            # var carry the context.
++            if parts[0] == "hermes":
++                return ""
+             return f"--profile {parts[0]}"
+     except ValueError:
+         pass
