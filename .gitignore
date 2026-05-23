@@ -1,0 +1,24 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Temporary files
+*.bak
+*.tmp
+*.log
+
+# Hermes profiles (contains API keys)
+profiles/*/credentials.yaml
+profiles/*/.env
+
+# Node modules (if any)
+node_modules/
+
+# Installer artifacts
+build/
+dist/
+*.egg-info/
+
+# OS
+.DS_Store
