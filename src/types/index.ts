@@ -199,6 +199,15 @@ export interface MaestroMessage {
    * Value: extension payload object
    */
   extensions?: Record<string, unknown>;
+
+  /**
+   * Explicit broadcast flag (CL-proteus-5d568a80 Item B).
+   * When true, this message fans out to all global handlers even
+   * without a venueId.  Without this flag, a no-venueId message is
+   * treated as point-to-point and the dispatch logs a
+   * broadcast_blocked_no_scope event.
+   */
+  broadcast?: boolean;
 }
 
 // ----------------------------------------------------------

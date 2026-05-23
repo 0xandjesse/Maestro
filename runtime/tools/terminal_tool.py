@@ -517,6 +517,53 @@ def _safe_command_preview(command: Any, limit: int = 200) -> str:
     except Exception:
         return f"<{type(command).__name__}>"
 
+# Exception types that are safe to retry because they indicate a transient
+# infrastructure / connectivity issue rather than a command-level failure.
+# These are idempotent-safe: the command never started executing, so retrying
+# won't cause duplicate side effects.
+_RETRYABLE_EXCEPTION_TYPES: set[type] = {
+    ConnectionRefusedError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    BrokenPipeError,
+    TimeoutError,
+    # OSError covers ECONNREFUSED, ECONNRESET, EPIPE, ENETUNREACH on sockets
+    # but also includes file-not-found — we filter those out below.
+    OSError,
+}
+
+
+def _is_transient_error(exc: BaseException) -> bool:
+    """Return True if *exc* is a transient infrastructure error safe to retry.
+
+    Commands that failed with these errors never started executing, so
+    retrying them won't produce duplicate side effects. All other exceptions
+    (e.g. RuntimeError, ValueError, CalledProcessError, etc.) may indicate
+    partial execution and are NOT retried.
+    """
+    exc_type = type(exc)
+    if exc_type in _RETRYABLE_EXCEPTION_TYPES and exc_type is not OSError:
+        return True
+
+    # For OSError, only retry on network / pipe errors (ECONNREFUSED,
+    # ECONNRESET, EPIPE, ENETUNREACH, ENOTCONN). File-system / permission
+    # errors (ENOENT, EACCES, ENOSPC) indicate a permanent problem.
+    if exc_type is OSError:
+        errno = getattr(exc, 'errno', None)
+        RETRYABLE_ERRNOS = frozenset({
+            32,   # EPIPE
+            104,  # ECONNRESET (Linux)
+            111,  # ECONNREFUSED (Linux)
+            101,  # ENETUNREACH (Linux)
+            107,  # ENOTCONN (Linux)
+            54,   # ECONNRESET (macOS)
+            61,   # ECONNREFUSED (macOS)
+            51,   # ENETUNREACH (macOS)
+        })
+        return errno in RETRYABLE_ERRNOS
+
+    return False
+
 def _looks_like_env_assignment(token: str) -> bool:
     """Return True when *token* is a leading shell environment assignment."""
     if "=" not in token or token.startswith("="):
@@ -2027,9 +2074,17 @@ def terminal_tool(
                 }, ensure_ascii=False)
         else:
             # Run foreground command with retry logic
+            # Retry only on transient, idempotent-safe exception types.
+            # Non-idempotent side-effect errors (e.g. subprocess that already
+            # wrote to disk) must NOT be retried — they cause duplicate mutations.
             max_retries = 3
             retry_count = 0
             result = None
+            
+            try:
+                from maestro_transport import audit_log as _audit
+            except ImportError:
+                _audit = None
             
             while retry_count <= max_retries:
                 try:
@@ -2047,17 +2102,83 @@ def terminal_tool(
                             "error": f"Command timed out after {effective_timeout} seconds"
                         }, ensure_ascii=False)
                     
-                    # Retry on transient errors
-                    if retry_count < max_retries:
+                    # Only retry on transient, idempotent-safe exception types.
+                    # Side-effect errors (the command may have partially executed)
+                    # are never retried to prevent duplicate mutations.
+                    is_retryable = _is_transient_error(e)
+                    
+                    # --- Non-idempotent retry suppression (CL-proteus-5d568a80 Item A) ---
+                    # Before retrying, check process_registry for children spawned
+                    # by the original execution.  If live children exist, the command
+                    # likely ran partially and retrying would cause duplicate side
+                    # effects (e.g. double file writes, duplicate API calls).
+                    has_spawned_children = False
+                    try:
+                        from tools.process_registry import process_registry as _preg
+                        has_spawned_children = _preg.has_active_processes(effective_task_id)
+                    except Exception:
+                        pass  # process_registry unavailable — fall through
+                    
+                    if has_spawned_children:
+                        logger.warning(
+                            "Retry suppressed: task %s has live child processes — "
+                            "retrying could cause duplicate side effects. Error: %s: %s",
+                            effective_task_id, type(e).__name__, e,
+                        )
+                        if _audit:
+                            _audit.write("duplicate_side_effect_retry_blocked", {
+                                "tool": "terminal",
+                                "task_id": effective_task_id,
+                                "error_type": type(e).__name__,
+                                "error_msg": str(e)[:500],
+                                "backend": env_type,
+                                "retry_attempt": retry_count + 1,
+                            })
+                        # Return the original error result instead of retrying
+                        return json.dumps({
+                            "output": "",
+                            "exit_code": -1,
+                            "error": (
+                                f"Command execution failed (retry suppressed to prevent "
+                                f"duplicate side effects): {type(e).__name__}: {str(e)}"
+                            ),
+                        }, ensure_ascii=False)
+                    # --- end non-idempotent retry suppression ---
+                    
+                    if is_retryable and retry_count < max_retries:
                         retry_count += 1
                         wait_time = 2 ** retry_count
-                        logger.warning("Execution error, retrying in %ds (attempt %d/%d) - Command: %s - Error: %s: %s - Task: %s, Backend: %s",
+                        logger.warning("Transient execution error, retrying in %ds (attempt %d/%d) - Command: %s - Error: %s: %s - Task: %s, Backend: %s",
                                        wait_time, retry_count, max_retries, _safe_command_preview(command), type(e).__name__, e, effective_task_id, env_type)
+                        if _audit:
+                            _audit.write("tool.call", {
+                                "tool": "terminal",
+                                "event": "retry",
+                                "attempt": retry_count,
+                                "max_retries": max_retries,
+                                "error_type": type(e).__name__,
+                                "error_msg": str(e)[:500],
+                                "task_id": effective_task_id,
+                                "backend": env_type,
+                            })
                         time.sleep(wait_time)
                         continue
                     
-                    logger.error("Execution failed after %d retries - Command: %s - Error: %s: %s - Task: %s, Backend: %s",
-                                 max_retries, _safe_command_preview(command), type(e).__name__, e, effective_task_id, env_type)
+                    if not is_retryable and retry_count == 0:
+                        logger.error("Non-retryable execution error (not retried to prevent duplicate side effects) - Command: %s - Error: %s: %s - Task: %s, Backend: %s",
+                                     _safe_command_preview(command), type(e).__name__, e, effective_task_id, env_type)
+                        if _audit:
+                            _audit.write("tool.call", {
+                                "tool": "terminal",
+                                "event": "error_no_retry",
+                                "error_type": type(e).__name__,
+                                "error_msg": str(e)[:500],
+                                "task_id": effective_task_id,
+                                "backend": env_type,
+                            })
+                    else:
+                        logger.error("Execution failed after %d retries - Command: %s - Error: %s: %s - Task: %s, Backend: %s",
+                                     max_retries, _safe_command_preview(command), type(e).__name__, e, effective_task_id, env_type)
                     return json.dumps({
                         "output": "",
                         "exit_code": -1,

@@ -53,6 +53,18 @@ from agent.account_usage import fetch_account_usage, render_account_usage_lines
 from agent.i18n import t
 from hermes_cli.config import cfg_get
 
+# ---- Audit log imports (Phase 1, Priority 4) ----
+try:
+    from maestro_transport.audit_log import (
+        write as _audit_write,
+        EVENT_AGENT_START, EVENT_AGENT_STOP, EVENT_KILL,
+        EVENT_SESSION_ORPHAN,
+    )
+except Exception:
+    _audit_write = None
+    EVENT_AGENT_START = EVENT_AGENT_STOP = EVENT_KILL = EVENT_SESSION_ORPHAN = None
+# ---- end audit imports ----
+
 # --- Agent cache tuning ---------------------------------------------------
 # Bounds the per-session AIAgent cache to prevent unbounded growth in
 # long-lived gateways (each AIAgent holds LLM clients, tool schemas,
@@ -635,6 +647,7 @@ from gateway.session import (
     SessionStore,
     SessionSource,
     SessionContext,
+    SessionValidator,
     build_session_context,
     build_session_context_prompt,
     build_session_key,
@@ -3515,6 +3528,39 @@ class GatewayRunner:
         except Exception as e:
             logger.debug("Stuck-loop detection failed: %s", e)
 
+        # Session Recovery validation (Phase 1, Priority 5)
+        # Validate sessions on startup: PID alive + port reachable.
+        # Mark stale entries orphaned; do NOT auto-restart bad state.
+        try:
+            validator = SessionValidator()
+            with self.session_store._lock:
+                self.session_store._ensure_loaded_locked()
+                entries = list(self.session_store._entries.values())
+            orphaned = validator.validate_and_mark_all(entries)
+            if orphaned:
+                logger.warning(
+                    "Session recovery: %d session(s) marked orphaned (dead PID or unreachable port)",
+                    orphaned,
+                )
+                if _audit_write and EVENT_SESSION_ORPHAN:
+                    for entry in entries:
+                        if entry.orphan_status == "orphaned":
+                            try:
+                                _audit_write(EVENT_SESSION_ORPHAN, {
+                                    "session_key": entry.session_key,
+                                    "session_id": entry.session_id,
+                                    "reason": entry.last_validation_reason,
+                                    "validation_failures": entry.validation_failures,
+                                })
+                            except Exception:
+                                pass
+                # Persist updated statuses to sessions.json
+                self.session_store._save()
+            else:
+                logger.info("Session recovery: all %d session(s) validated valid", len(entries))
+        except Exception as e:
+            logger.debug("Session recovery validation failed: %s", e)
+
         connected_count = 0
         enabled_platform_count = 0
         startup_nonretryable_errors: list[str] = []
@@ -4913,6 +4959,19 @@ class GatewayRunner:
             return
 
         async def _stop_impl() -> None:
+            # ---- Audit log: agent.stop (Phase 1, Priority 4) ----
+            try:
+                if _audit_write and EVENT_AGENT_STOP:
+                    _audit_write(EVENT_AGENT_STOP, {
+                        "agent_id": None,
+                        "reason": "restart" if self._restart_requested else "shutdown",
+                        "exit_code": 0,
+                        "duration_s": getattr(self, "started_at", None) and (time.monotonic() - self.started_at) or None,
+                    })
+            except Exception:
+                pass
+            # ---- end agent.stop ----
+
             def _kill_tool_subprocesses(phase: str) -> None:
                 """Kill tool subprocesses + tear down terminal envs + browsers.
 
@@ -8829,6 +8888,20 @@ class GatewayRunner:
                     pass
         except Exception:
             pass
+
+        # ---- Audit log: kill (Phase 1, Priority 4) ----
+        try:
+            if _audit_write and EVENT_KILL:
+                _audit_write(EVENT_KILL, {
+                    "target_agent_id": None if kill_all else session_key,
+                    "issuer": getattr(source, "user_id", None) or "gateway",
+                    "reason": "/kill --all" if kill_all else "/kill",
+                    "timestamp": time.time(),
+                    "killed_loops": killed_loops,
+                })
+        except Exception:
+            pass
+        # ---- end kill ----
 
         return "Kill switch activated: killed {} active loop(s).{}".format(
             killed_loops,
@@ -17289,7 +17362,22 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
         if runner.exit_reason:
             logger.error("Gateway exiting cleanly: %s", runner.exit_reason)
         return True
-    
+
+    # ---- Audit log: agent.start (Phase 1, Priority 4) ----
+    try:
+        if _audit_write and EVENT_AGENT_START:
+            _audit_write(EVENT_AGENT_START, {
+                "agent_id": getattr(runner, "_agent_id", None),
+                "pid": os.getpid(),
+                "port": None,
+                "profile": getattr(runner, "config", {}).get("profile_name") if hasattr(runner, "config") else None,
+                "model": None,
+                "config_hash": None,
+            })
+    except Exception:
+        pass
+    # ---- end agent.start ----
+
     # Start background cron ticker so scheduled jobs fire automatically.
     # Pass the event loop so cron delivery can use live adapters (E2EE support).
     cron_stop = threading.Event()

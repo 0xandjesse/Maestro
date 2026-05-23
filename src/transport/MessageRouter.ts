@@ -129,25 +129,38 @@ export class MessageRouter extends EventEmitter {
         all = [...typeHandlers, ...wildcardHandlers];
       }
     } else {
-      // No venueId: only deliver to handlers explicitly registered for
-      // broadcast messages.  Messages without a venueId used to fan out to
-      // ALL global handlers of that type, which caused duplicate delivery
-      // for direct messages.  Now we only broadcast when the message type
-      // is explicitly 'broadcast' or when a wildcard handler has opted in.
+      // No venueId: messages must explicitly opt in to broadcast delivery.
+      // Previously, messages without a venueId would fan out to ALL global
+      // handlers, causing duplicate delivery for direct messages.
       //
-      // Rationale: a direct or report message without a venueId is addressed
-      // to a specific recipient — it should not explode to every handler.
-      // Only 'broadcast' messages carry implicit fan-out semantics.
-      if (message.type === 'broadcast' || message.recipient === '*') {
+      // CL-proteus-5d568a80 Item B: Require explicit broadcast:true flag or
+      // venue list.  Messages without a venueId that lack broadcast:true are
+      // treated as point-to-point and only delivered to type-specific handlers.
+      // Ambiguous messages (no venue, no broadcast flag, not type='broadcast')
+      // are logged as broadcast_blocked_no_scope for forensic tracing.
+
+      const isExplicitBroadcast = (message as any).broadcast === true;
+      const isTypeBroadcast = message.type === 'broadcast';
+      const isWildcardRecipient = message.recipient === '*';
+
+      if (isExplicitBroadcast || isTypeBroadcast || isWildcardRecipient) {
         // Legitimate broadcast — fan out to all global handlers
         const typeHandlers = this.handlers.get(message.type) ?? new Set();
         const wildcardHandlers = this.handlers.get('*') ?? new Set();
         all = [...typeHandlers, ...wildcardHandlers];
       } else {
-        // Point-to-point without venueId: deliver only to type-specific
-        // handlers (not wildcards).  Wildcard handlers receive broadcasts
-        // via the path above.
+        // Point-to-point without venueId and without explicit broadcast flag:
+        // deliver only to type-specific handlers (not wildcards).
+        // Log the suppression for forensic tracing.
         all = [...(this.handlers.get(message.type) ?? new Set())];
+
+        // Emit broadcast_blocked_no_scope event for forensic tracing
+        this.emit('broadcast_blocked_no_scope', {
+          messageId: message.id,
+          type: message.type,
+          recipient: message.recipient,
+          reason: 'no venueId and no explicit broadcast:true flag',
+        });
       }
     }
 
@@ -175,7 +188,7 @@ export class MessageRouter extends EventEmitter {
     type: MessageType,
     content: string,
     recipient: string,
-    options: SendOptions & { stageId?: string; provenance?: MaestroMessage['provenance'] } = {},
+    options: SendOptions & { stageId?: string; provenance?: MaestroMessage['provenance']; broadcast?: boolean } = {},
   ): MaestroMessage {
     return {
       id: randomUUID(),
@@ -189,6 +202,7 @@ export class MessageRouter extends EventEmitter {
       ...(options.venueId ? { venueId: options.venueId } : {}),
       ...(options.replyTo ? { replyTo: options.replyTo } : {}),
       ...(options.provenance ? { provenance: options.provenance } : {}),
+      ...(options.broadcast ? { broadcast: options.broadcast } : {}),
     };
   }
 

@@ -727,6 +727,20 @@ class MaestroTransport:
         log.info(f"Inbound from {sender} type={msg_type}")
         self.logger.log(self.agent_id, "message_received", {"sender": sender, "type": msg_type, "msg_id": msg_id}, session_id=msg_id)
 
+        # ---- Audit log: transport.recv (Phase 1, Priority 4) ----
+        try:
+            from .audit_log import write as _audit_write, EVENT_TRANSPORT_RECV
+            _bytes = len(json.dumps(message, ensure_ascii=False).encode("utf-8"))
+            _audit_write(EVENT_TRANSPORT_RECV, {
+                "to_agent": getattr(self, "agent_id", None),
+                "from_agent": sender,
+                "message_id": msg_id,
+                "bytes": _bytes,
+            })
+        except Exception:
+            pass
+        # ---- end transport.recv ----
+
         # Write to work log before any processing
         self._write_work_log(message)
 
@@ -980,6 +994,17 @@ class MaestroTransport:
     async def _broadcast_fanout(self, message):
         msg_id = message.get("id")
         log.info(f"Fanning out broadcast {msg_id} to peers")
+        # ---- Audit log: dispatch.broadcast ----
+        try:
+            from .audit_log import write as _audit_write, EVENT_DISPATCH_BROADCAST
+            _audit_write(EVENT_DISPATCH_BROADCAST, {
+                "from_agent": getattr(self, "agent_id", None),
+                "message_id": msg_id,
+                "msg_type": message.get("type"),
+            })
+        except Exception:
+            pass
+        # ---- end dispatch.broadcast ----
         all_peers = self.registry._load()
         tasks = []
         for peer in all_peers:
@@ -1000,8 +1025,40 @@ class MaestroTransport:
             try:
                 async with s.post(endpoint, json=message, timeout=ClientTimeout(total=10)) as resp:
                     log.debug(f"Deliver to {endpoint}: {resp.status}")
+                    # ---- Audit log: transport.send (success) ----
+                    try:
+                        from .audit_log import write as _audit_write, EVENT_TRANSPORT_SEND
+                        _payload = message if isinstance(message, dict) else {"content": str(message)}
+                        bytes_out = len(json.dumps(_payload, ensure_ascii=False).encode("utf-8"))
+                        _audit_write(EVENT_TRANSPORT_SEND, {
+                            "from_agent": getattr(self, "agent_id", None),
+                            "to_agent": endpoint,
+                            "message_id": message.get("id") if isinstance(message, dict) else None,
+                            "bytes": bytes_out,
+                            "success": True,
+                        })
+                    except Exception:
+                        pass
+                    # ---- end transport.send ----
             except Exception as e:
                 log.error(f"Deliver failed to {endpoint}: {type(e).__name__}: {e}")
+                # ---- Audit log: transport.send (error) ----
+                try:
+                    import asyncio as _asyncio
+                    from .audit_log import write as _audit_write, EVENT_TRANSPORT_SEND
+                    _payload = message if isinstance(message, dict) else {"content": str(message)}
+                    bytes_out = len(json.dumps(_payload, ensure_ascii=False).encode("utf-8"))
+                    _audit_write(EVENT_TRANSPORT_SEND, {
+                        "from_agent": getattr(self, "agent_id", None),
+                        "to_agent": endpoint,
+                        "message_id": message.get("id") if isinstance(message, dict) else None,
+                        "bytes": bytes_out,
+                        "success": False,
+                        "error_type": type(e).__name__,
+                    })
+                except Exception:
+                    pass
+                # ---- end transport.send ----
 
     async def _notify_loop_detected(self, sender_id: str, reason: str, content_preview: str):
         """Surface a loop detection warning to Jesse via the gateway bridge. Best-effort — never raises."""

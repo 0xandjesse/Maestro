@@ -366,6 +366,17 @@ export class HttpTransport {
           capabilities:    joinRequest.capabilities,
         });
 
+        // If the remote agent sent a contact card with an endpoint, prefer that
+        if (joinRequest.contactCard?.endpoint) {
+          this.registry.register({
+            agentId:         joinRequest.agentId,
+            webhookEndpoint: `${joinRequest.contactCard.endpoint}/message`,
+            capabilities:    joinRequest.contactCard.capabilities,
+            publicKey:       joinRequest.contactCard.publicKey,
+            wallet:          joinRequest.contactCard.walletAddress,
+          });
+        }
+
         // Notify existing members (fire-and-forget)
         this.notifyMembersJoined(connectionId, joinRequest.agentId).catch(() => {});
       }
