@@ -201,6 +201,12 @@ class HermesClient:
             ) as resp:
                 if resp.status != 200:
                     log.error(f"Chat completions failed {resp.status}: {await resp.text()}")
+                    # ---- Audit log: transport.error (Phase 1, Priority 4) ----
+                    try:
+                        from .audit_log import write as _audit_write, EVENT_TRANSPORT_ERROR
+                        _audit_write(EVENT_TRANSPORT_ERROR, {"error_type": "api_failure", "status": resp.status, "endpoint": "chat/completions", "sender": self.agent_id})
+                    except Exception:
+                        pass
                     return None
                 data = await resp.json()
                 output = data.get("choices", [{}])[0].get("message", {}).get("content")
@@ -699,7 +705,14 @@ class MaestroTransport:
 
     async def handle_message(self, req):
         try: message = await req.json()
-        except: return web.json_response({"accepted": False, "reason": "Invalid JSON"}, status=400)
+        except:
+            # ---- Audit log: transport.error (Phase 1, Priority 4) ----
+            try:
+                from .audit_log import write as _audit_write, EVENT_TRANSPORT_ERROR
+                _audit_write(EVENT_TRANSPORT_ERROR, {"error_type": "invalid_json", "reason": "Invalid JSON body"})
+            except Exception:
+                pass
+            return web.json_response({"accepted": False, "reason": "Invalid JSON"}, status=400)
         if not message.get("id") or not message.get("type") or not message.get("sender"):
             return web.json_response({"accepted": False, "reason": "Invalid message format"}, status=400)
 
@@ -722,6 +735,12 @@ class MaestroTransport:
             nonce_ok, nonce_reason = self.nonce_set.check(nonce, ts, msg_type)
             if not nonce_ok:
                 log.warning(f"Replay/reject: nonce={nonce} from {sender}: {nonce_reason}")
+                # ---- Audit log: transport.error (Phase 1, Priority 4) ----
+                try:
+                    from .audit_log import write as _audit_write, EVENT_TRANSPORT_ERROR
+                    _audit_write(EVENT_TRANSPORT_ERROR, {"error_type": "nonce_reject", "nonce": nonce[:16] if nonce else "", "sender": sender, "reason": nonce_reason})
+                except Exception:
+                    pass
                 return web.json_response({"accepted": False, "reason": nonce_reason}, status=400)
 
         log.info(f"Inbound from {sender} type={msg_type}")

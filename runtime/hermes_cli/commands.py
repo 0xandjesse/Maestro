@@ -157,9 +157,15 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("busy", "Control what Enter does while Hermes is working", "Configuration",
                cli_only=True, args_hint="[queue|steer|interrupt|status]",
                subcommands=("queue", "steer", "interrupt", "status")),
-    CommandDef("maestroin", "Toggle Maestro inbound message display in this chat", "Configuration",
+    CommandDef("maestrofull", "Show Maestro send/receive info + full content", "Configuration",
                gateway_only=True),
-    CommandDef("maestroout", "Toggle Maestro outbound reply mirroring to this chat", "Configuration",
+    CommandDef("maestroshort", "Show Maestro send/receive info + subject only", "Configuration",
+               gateway_only=True),
+    CommandDef("maestrooff", "Disable all Maestro notifications in this chat", "Configuration",
+               gateway_only=True),
+    CommandDef("checkliston", "Enable full checklist audit mode (detailed updates)", "Configuration",
+               gateway_only=True),
+    CommandDef("checklistoff", "Enable checklist heartbeat mode (minimal updates only)", "Configuration",
                gateway_only=True),
 
     # Tools & Skills

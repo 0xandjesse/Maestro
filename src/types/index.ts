@@ -171,13 +171,6 @@ export interface MaestroMessage {
   /** Unix epoch ms — set by original sender, immutable */
   timestamp: number;
 
-  /**
-   * Optional provenance chain.
-   * Agents and Venues determine when required based on risk profile.
-   * See ProvenancePolicy for Venue-level enforcement.
-   */
-  provenance?: Provenance;
-
   /** Optional Stage context */
   stageId?: string;
 

@@ -1,5 +1,5 @@
 import { ConnectionManager, DEFAULT_PERMISSIONS } from '../connection/ConnectionManager.js';
-import { enforceProvenancePolicy } from '../connection/provenanceEnforcer.js';
+import { verificationGate } from '../trust/VenueBouncer.js';
 import { CreateConnectionRequest, ConnectionRules } from '../connection/types.js';
 import { MaestroMessage } from '../types/index.js';
 
@@ -326,10 +326,10 @@ describe('ConnectionManager - lifecycle', () => {
 });
 
 // ----------------------------------------------------------
-// Provenance policy enforcer tests
+// Venue Bouncer tests (Sovereign Trust — venue gate layer)
 // ----------------------------------------------------------
 
-describe('enforceProvenancePolicy', () => {
+describe('VenueBouncer.verificationGate', () => {
   function makeMsg(overrides: Partial<MaestroMessage> = {}): MaestroMessage {
     return {
       id: '1',
@@ -344,107 +344,119 @@ describe('enforceProvenancePolicy', () => {
   }
 
   it('accepts message with no policy restrictions', () => {
-    const result = enforceProvenancePolicy(makeMsg(), {});
-    expect(result.accepted).toBe(true);
+    const result = verificationGate(makeMsg(), {});
+    expect(result.allowed).toBe(true);
   });
 
   it('rejects message missing required provenance', () => {
-    const result = enforceProvenancePolicy(
+    const result = verificationGate(
       makeMsg({ type: 'capability' }),
       { requiredFor: ['capability'] },
     );
-    expect(result.accepted).toBe(false);
-    expect(result.reason).toContain('provenance_required');
+    expect(result.allowed).toBe(false);
+    expect(result.error).toBe('ProvenanceRequired');
+    expect(result.reason).toContain('provenance_required_for_capability');
   });
 
   it('rejects truncated provenance when not allowed', () => {
-    const result = enforceProvenancePolicy(
+    const result = verificationGate(
       makeMsg({
-        provenance: {
-          mode: 'bookends',
-          truncatedChain: {
+        extensions: {
+          provenance: {
             mode: 'bookends',
-            recentHops: [],
-            hiddenMiddleCount: 2,
-            fullChainHash: 'abc',
-            truncatedAt: 1000,
+            truncatedChain: {
+              mode: 'bookends',
+              recentHops: [],
+              hiddenMiddleCount: 2,
+              fullChainHash: 'abc',
+              truncatedAt: 1000,
+            },
+            originalSignature: 'sig',
+            contentHash: 'hash',
           },
-          originalSignature: 'sig',
-          contentHash: 'hash',
         },
       }),
       { allowTruncated: false },
     );
-    expect(result.accepted).toBe(false);
+    expect(result.allowed).toBe(false);
+    expect(result.error).toBe('ProvenanceRequired');
     expect(result.reason).toBe('truncated_provenance_not_allowed');
   });
 
   it('rejects mode below minimum', () => {
-    const result = enforceProvenancePolicy(
+    const result = verificationGate(
       makeMsg({
-        provenance: {
-          mode: 'tail-only',
-          truncatedChain: {
+        extensions: {
+          provenance: {
             mode: 'tail-only',
-            recentHops: [],
-            hiddenMiddleCount: 5,
-            fullChainHash: 'abc',
-            truncatedAt: 1000,
+            truncatedChain: {
+              mode: 'tail-only',
+              recentHops: [],
+              hiddenMiddleCount: 5,
+              fullChainHash: 'abc',
+              truncatedAt: 1000,
+            },
+            originalSignature: 'sig',
+            contentHash: 'hash',
           },
-          originalSignature: 'sig',
-          contentHash: 'hash',
         },
       }),
       { minimumTruncationMode: 'bookends' },
     );
-    expect(result.accepted).toBe(false);
+    expect(result.allowed).toBe(false);
+    expect(result.error).toBe('ProvenanceRequired');
     expect(result.reason).toContain('below_minimum');
   });
 
   it('rejects non-full chain when full required for type', () => {
-    const result = enforceProvenancePolicy(
+    const result = verificationGate(
       makeMsg({
         type: 'financial',
-        provenance: {
-          mode: 'bookends',
-          truncatedChain: {
+        extensions: {
+          provenance: {
             mode: 'bookends',
-            recentHops: [],
-            hiddenMiddleCount: 1,
-            fullChainHash: 'abc',
-            truncatedAt: 1000,
+            truncatedChain: {
+              mode: 'bookends',
+              recentHops: [],
+              hiddenMiddleCount: 1,
+              fullChainHash: 'abc',
+              truncatedAt: 1000,
+            },
+            originalSignature: 'sig',
+            contentHash: 'hash',
           },
-          originalSignature: 'sig',
-          contentHash: 'hash',
         },
       }),
       { requireFullChainFor: ['financial'] },
     );
-    expect(result.accepted).toBe(false);
+    expect(result.allowed).toBe(false);
+    expect(result.error).toBe('ProvenanceRequired');
     expect(result.reason).toContain('full_chain_required');
   });
 
   it('accepts full chain when required', () => {
-    const result = enforceProvenancePolicy(
+    const result = verificationGate(
       makeMsg({
         type: 'financial',
-        provenance: {
-          mode: 'full',
-          chain: [],
-          originalSignature: 'sig',
-          contentHash: 'hash',
+        extensions: {
+          provenance: {
+            mode: 'full',
+            chain: [],
+            originalSignature: 'sig',
+            contentHash: 'hash',
+          },
         },
       }),
       { requireFullChainFor: ['financial'] },
     );
-    expect(result.accepted).toBe(true);
+    expect(result.allowed).toBe(true);
   });
 
   it('accepts message without provenance when not required', () => {
-    const result = enforceProvenancePolicy(
+    const result = verificationGate(
       makeMsg({ type: 'chat' }),
       { requiredFor: ['capability'] },
     );
-    expect(result.accepted).toBe(true);
+    expect(result.allowed).toBe(true);
   });
 });

@@ -10,6 +10,7 @@ import {
   verifyTruncatedChainSegments,
 } from '../provenance/verifier.js';
 import { LocalKeyResolver } from '../resolvers/LocalKeyResolver.js';
+import { getProvenanceExtension } from '../extensions/index.js';
 import { MaestroMessage } from '../types/index.js';
 
 // ----------------------------------------------------------
@@ -42,14 +43,16 @@ async function buildChain(agentCount: number) {
   for (let i = 1; i < agents.length; i++) {
     const agent = agents[i];
     const prevAgent = agents[i - 1];
+    const prov = getProvenanceExtension(message);
+    const newProv = await addAttestation(
+      prov!,
+      prevAgent.id,
+      agent.id,
+      agent.privateKey,
+    );
     message = {
       ...message,
-      provenance: await addAttestation(
-        message.provenance!,
-        prevAgent.id,
-        agent.id,
-        agent.privateKey,
-      ),
+      extensions: { ...(message.extensions ?? {}), provenance: newProv },
     };
   }
 
@@ -100,12 +103,13 @@ describe('Full provenance chain', () => {
 
   it('fails if original signature is tampered', async () => {
     const { message, resolver } = await buildChain(3);
+    const prov = getProvenanceExtension(message);
     const tampered: MaestroMessage = {
       ...message,
-      provenance: {
-        ...message.provenance!,
+      extensions: { ...(message.extensions ?? {}), provenance: {
+        ...prov!,
         originalSignature: 'deadbeef'.repeat(16),
-      },
+      }},
     };
     const result = await verifyProvenance(tampered, resolver);
     expect(result.valid).toBe(false);
@@ -114,11 +118,12 @@ describe('Full provenance chain', () => {
 
   it('fails if an attestation link signature is tampered', async () => {
     const { message, resolver } = await buildChain(3);
-    const chain = [...message.provenance!.chain!];
+    const prov = getProvenanceExtension(message);
+    const chain = [...prov!.chain!];
     chain[0] = { ...chain[0], signature: 'deadbeef'.repeat(16) };
     const tampered: MaestroMessage = {
       ...message,
-      provenance: { ...message.provenance!, chain },
+      extensions: { ...(message.extensions ?? {}), provenance: { ...prov!, chain } },
     };
     const result = await verifyProvenance(tampered, resolver);
     expect(result.valid).toBe(false);
@@ -153,7 +158,8 @@ describe('Full provenance chain', () => {
 describe('Provenance truncation', () => {
   it('truncates a 5-hop chain to tail-only (2 recent hops)', async () => {
     const { message } = await buildChain(5);
-    const truncated = truncateProvenance(message.provenance!, 'tail-only', 2);
+    const prov = getProvenanceExtension(message);
+    const truncated = truncateProvenance(prov!, 'tail-only', 2);
     expect(truncated.mode).toBe('tail-only');
     expect(truncated.truncatedChain!.recentHops).toHaveLength(2);
     expect(truncated.truncatedChain!.originNeighborhood).toHaveLength(0);
@@ -162,7 +168,8 @@ describe('Provenance truncation', () => {
 
   it('truncates a 5-hop chain to bookends', async () => {
     const { message } = await buildChain(5);
-    const truncated = truncateProvenance(message.provenance!, 'bookends', 2);
+    const prov = getProvenanceExtension(message);
+    const truncated = truncateProvenance(prov!, 'bookends', 2);
     expect(truncated.mode).toBe('bookends');
     expect(truncated.truncatedChain!.originNeighborhood).toHaveLength(1); // first hop
     expect(truncated.truncatedChain!.recentHops.length).toBeGreaterThanOrEqual(1);
@@ -171,7 +178,8 @@ describe('Provenance truncation', () => {
 
   it('truncates a 8-hop chain to origin-neighborhood (3 origin + 2 recent)', async () => {
     const { message } = await buildChain(8);
-    const truncated = truncateProvenance(message.provenance!, 'origin-neighborhood', 2, 3);
+    const prov = getProvenanceExtension(message);
+    const truncated = truncateProvenance(prov!, 'origin-neighborhood', 2, 3);
     expect(truncated.mode).toBe('origin-neighborhood');
     expect(truncated.truncatedChain!.originNeighborhood).toHaveLength(3);
     expect(truncated.truncatedChain!.recentHops).toHaveLength(2);
@@ -180,12 +188,17 @@ describe('Provenance truncation', () => {
 
   it('verifyTruncatedChainSegments validates origin neighborhood', async () => {
     const { message, resolver } = await buildChain(8);
-    const truncated = truncateProvenance(message.provenance!, 'origin-neighborhood', 2, 3);
-    const truncatedMessage = { ...message, provenance: truncated };
+    const prov = getProvenanceExtension(message);
+    const truncated = truncateProvenance(prov!, 'origin-neighborhood', 2, 3);
+    const truncatedMessage = {
+      ...message,
+      extensions: { ...(message.extensions ?? {}), provenance: truncated },
+    };
 
+    const ext = getProvenanceExtension(truncatedMessage);
     const result = await verifyTruncatedChainSegments(
-      truncatedMessage.provenance!,
-      truncatedMessage.provenance!.originalSignature,
+      ext!,
+      ext!.originalSignature,
       resolver,
     );
     expect(result.originSegmentValid).toBe(true);
@@ -195,7 +208,8 @@ describe('Provenance truncation', () => {
 
   it('throws if truncateProvenance called on non-full chain', async () => {
     const { message } = await buildChain(5);
-    const truncated = truncateProvenance(message.provenance!, 'bookends');
+    const prov = getProvenanceExtension(message);
+    const truncated = truncateProvenance(prov!, 'bookends');
     expect(() => truncateProvenance(truncated, 'tail-only')).toThrow();
   });
 });
@@ -218,7 +232,7 @@ describe('Venue provenance policy enforcement', () => {
 
     // Simulate Venue enforcement
     const requiresProvenance = (msg: MaestroMessage): boolean => {
-      return msg.type === 'capability' && !msg.provenance;
+      return msg.type === 'capability' && !getProvenanceExtension(msg);
     };
 
     expect(requiresProvenance(message)).toBe(true);

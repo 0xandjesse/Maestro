@@ -8,6 +8,7 @@
 // ============================================================
 
 import { AttestationLink, MaestroMessage, Provenance, PublicKeyResolver, VerificationResult } from '../types/index.js';
+import { getProvenanceExtension } from '../extensions/index.js';
 import { attestationPayload, bytesToHex, hashString, originalSignaturePayload, verify } from '../crypto/index.js';
 
 // ----------------------------------------------------------
@@ -33,15 +34,14 @@ export async function verifyProvenance(
   message: MaestroMessage,
   resolver: PublicKeyResolver,
 ): Promise<VerificationResult> {
-  if (!message.provenance) {
+  const provenance = getProvenanceExtension(message);
+  if (!provenance) {
     return {
       valid: false,
       status: 'missing-provenance',
-      message: 'Message has no provenance field.',
+      message: 'Message has no provenance extension.',
     };
   }
-
-  const provenance = message.provenance;
 
   // Step 1: Verify content hash
   const expectedContentHash = hashString(message.content);
