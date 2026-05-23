@@ -605,14 +605,14 @@ class MaestroTransport:
         self.nonce_set = NonceSet(ttl_seconds=300, max_size=10000, max_drift_sec=30)
         self.bb_root = Path("/home/andjesse/.maestro/blackboards")
         self.bb_root.mkdir(parents=True, exist_ok=True)
+        self._loopback_count = 0  # diagnostic counter
+        self._received_ids = set()  # track IDs we have received/processed so we can drop replies to them
         self._outbound_history = []  # (timestamp, recipient_id) for circuit breaker
         self._outbound_cooldowns = {}  # recipient_id -> cooldown_until_timestamp
         self._ack_pattern = re.compile(
             r'\b(Standing by|Copy|Acknowledged|Ready|On deck|Ack|Received|Got it|Roger|Will do|Understood|Noted)\b',
             re.IGNORECASE
         )
-        self._loopback_count = 0
-        self._received_ids = set()  # track IDs we have received/processed so we can drop replies to them  # diagnostic counter
         self.started_at = None
         self.app = web.Application()
         self.app.router.add_get("/health", self.handle_health)
@@ -960,20 +960,23 @@ class MaestroTransport:
     # ----------------------------------------------------------
 
     async def _process_message(self, message):
+        """Process inbound message, route reply to sender with loop protection."""
         try:
-            log.debug(f"Forward to Hermes: {message.get('id')}")
+            msg_id = message.get("id", "unknown")
+            log.debug(f"_process_message: msg_id={msg_id}")
             output = await self.hermes.send_and_complete(message)
             if not output:
                 log.warning("No output from Hermes — not routing reply")
                 return
             content = output.strip() if isinstance(output, str) else str(output).strip() if output else ""
-            # --- Outbound ACK filter ---
+            # --- Outbound ACK filter (Option 2) ---
             if len(content) < 80 and self._ack_pattern.search(content):
                 log.info(f"Outbound ACK filter dropped: {content[:60]}...")
                 return
             sender_id = message["sender"]["agentId"]
-            # --- Per-pair circuit breaker ---
+            # --- Per-pair circuit breaker (Option 3) ---
             now_ts = time.time()
+            # prune old history
             self._outbound_history = [(t, r) for t, r in self._outbound_history if now_ts - t < 60]
             pair_count = sum(1 for t, r in self._outbound_history if r == sender_id)
             cooldown_until = self._outbound_cooldowns.get(sender_id, 0)
@@ -1231,7 +1234,7 @@ class MaestroTransport:
             except Exception:
                 pass
         bridge_url = self.config.get("gatewayBridgeUrl", "http://127.0.0.1:8644/maestro/notify")
-        # Resolve sender robustly: may be dict {"agentId":"..."}, string, or missing
+        # Resolve sender robustly
         sender_raw = message.get("sender", "unknown")
         if isinstance(sender_raw, dict):
             sender = sender_raw.get("agentId", "unknown")
@@ -1239,6 +1242,12 @@ class MaestroTransport:
             sender = str(sender_raw) if sender_raw else "unknown"
         try:
             content = message.get("content", "")
+            # Resolve sender robustly: may be dict {"agentId":"..."}, string, or missing
+            sender_raw = message.get("sender", "unknown")
+            if isinstance(sender_raw, dict):
+                sender = sender_raw.get("agentId", "unknown")
+            else:
+                sender = str(sender_raw) if sender_raw else "unknown"
             # Telegram message limit is 4096 chars. Use full content up to that,
             # truncate with ellipsis if over, and attach a file hint for overflow.
             if len(content) > 3900:

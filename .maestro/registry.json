@@ -1,16 +1,38 @@
-[
-  {
+{
+  "0x39bd1234567890abcdef1234567890abcdef1234": {
     "agentId": "songbird",
-    "webhookEndpoint": "http://10.0.2.2:3842/message",
-    "capabilities": ["openclaw"],
-    "registeredAt": 1746144000000,
-    "lastSeen": 1746144000000
+    "role": "CTO"
   },
-  {
-    "agentId": "hermes-lex",
-    "webhookEndpoint": "http://0.0.0.0:3844/message",
-    "capabilities": ["maestro-transport", "hermes-agent"],
-    "registeredAt": 1746144000000,
-    "lastSeen": 1746144000000
+  "0xabcdef1234567890abcdef1234567890abcdef12": {
+    "agentId": "lexicon",
+    "role": "COO"
+  },
+  "0x1234567890abcdef1234567890abcdef12345678": {
+    "agentId": "proteus",
+    "role": "TechLead"
+  },
+  "0x8cfde6efdfc4ed5ab1f6acbbd1ba49bf31932f84": {
+    "agentId": "hermes",
+    "role": "CMO"
+  },
+  "0x9cad66723ea7e3c9af89c0664e03c40fcfee9501": {
+    "agentId": "mnemosyne",
+    "role": "DBI"
+  },
+  "0x32b7ea5c1d5311e8f0d289ff9f02f47aa5c653c0": {
+    "agentId": "stormtrooper",
+    "role": "E&M"
+  },
+  "0x061c09a5a7c9594413b2806205288f4474287cf1": {
+    "agentId": "penny-lane",
+    "role": "Writer"
+  },
+  "0x27c3d3b047672ba2cf4abd7688e81f4fbb044ead": {
+    "agentId": "rosetta",
+    "role": "R&D"
+  },
+  "0xd2435e88f3575be3ee762a3183629548165f9ed6": {
+    "agentId": "lulu",
+    "role": "Research"
   }
-]
+}

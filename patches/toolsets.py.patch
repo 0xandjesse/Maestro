@@ -1,0 +1,39 @@
+diff --git a/toolsets.py b/toolsets.py
+index 8ec45f11a..8310e5686 100644
+--- a/toolsets.py
++++ b/toolsets.py
+@@ -70,6 +70,13 @@ _HERMES_CORE_TOOLS = [
+     "kanban_unblock",
+     # Computer use (macOS, gated on cua-driver being installed via check_fn)
+     "computer_use",
++    # Agent persistent memory (per-agent KV store, backed by ~/.maestro/blackboards/memory_{id}.json)
++    "memory_write", "memory_read", "memory_search", "memory_delete", "memory_list",
++    # Shared P2N blackboards (cross-agent work queues, shared state)
++    "bb_read", "bb_write", "bb_delete", "bb_list", "bb_append",
++    # Checklist (hierarchical task delegation primitive)
++    "checklist_create", "checklist_read", "checklist_update_item",
++    "checklist_complete_item", "checklist_list", "checklist_cancel",
+ ]
+ 
+ 
+@@ -194,6 +201,20 @@ TOOLSETS = {
+         "tools": ["memory"],
+         "includes": []
+     },
++    "agent_memory": {
++        "description": "Cross-agent persistent memory and shared blackboard to-do lists. memory_write/read/search/delete for per-agent KV store. bb_read/bb_write/bb_list/bb_append for shared P2N blackboards (to-do lists, work queues, shared state, agent activity).",
++        "tools": ["memory_write", "memory_read", "memory_search", "memory_delete", "memory_list",
++                  "bb_read", "bb_write", "bb_delete", "bb_list", "bb_append"],
++        "includes": []
++    },
++    "checklist": {
++        "description": "Hierarchical task delegation primitive. checklist_create/read/update_item/complete_item/list/cancel. Officers create Checklists, assign to subordinates, who work top-to-bottom automatically. Completion pings sent via Maestro.",
++        "tools": [
++            "checklist_create", "checklist_read", "checklist_update_item",
++            "checklist_complete_item", "checklist_list", "checklist_cancel",
++        ],
++        "includes": [],
++    },
+     
+     "session_search": {
+         "description": "Search and recall past conversations with summarization",
