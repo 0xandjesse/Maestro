@@ -44,7 +44,8 @@ export async function createMessage(
   };
 
   if (options.provenanceMode && privateKeyHex) {
-    message.provenance = await createProvenance(message, privateKeyHex, options.provenanceMode);
+    const provenance = await createProvenance(message, privateKeyHex, options.provenanceMode);
+    message.extensions = { ...(message.extensions ?? {}), provenance };
   }
 
   return message;

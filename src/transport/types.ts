@@ -26,6 +26,8 @@ export interface SendOptions {
   replyTo?: string;
   payload?: Record<string, unknown>;
   artifacts?: Artifact[];
+  /** Scope this message to a specific Venue/Connection */
+  venueId?: string;
 }
 
 export interface Artifact {
@@ -78,6 +80,7 @@ export interface AgentRegistration {
   webhookEndpoint: string;
   publicKey?: string;
   wallet?: string;
+  friendlyName?: string;
   capabilities?: string[];
   registeredAt: number;
   lastSeen: number;
@@ -89,7 +92,11 @@ export interface AgentRegistration {
 
 export interface MaestroConfig {
   agentId: string;
+  /** Domain for nUID generation. Default: 'local' */
+  domain?: string;
   wallet?: string;
+  /** Agent capabilities advertised in Contact Cards */
+  capabilities?: string[];
   webhookPort?: number;
   webhookPath?: string;
   discovery?: DiscoveryConfig;

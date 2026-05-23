@@ -1,10 +1,19 @@
 {
   "name": "@maestro-protocol/core",
   "version": "0.2.0",
-  "description": "Maestro Protocol — open coordination layer for autonomous agents",
+  "description": "Maestro Protocol — one-line install for autonomous AI agents with transport, Venue membership, cross-Venue routing, provenance, blackboard, and Telegram gateway",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
+  "bin": {
+    "maestro": "./cli/maestro.js"
+  },
+  "files": [
+    "dist/",
+    "runtime/",
+    "cli/",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",

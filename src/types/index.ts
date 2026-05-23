@@ -8,6 +8,7 @@
 
 export interface AgentIdentity {
   agentId: string;
+  /** Global network identity — wallet address. This is the UID. */
   wallet?: string;
   /** Optional LOCR credential binding */
   identityProof?: LocRCredential;
@@ -21,8 +22,23 @@ export interface LocRCredential {
 }
 
 // ----------------------------------------------------------
-// Attestation Links
+// Contact Card (for non-local identity exchange)
 // ----------------------------------------------------------
+
+export interface ContactCard {
+  /** Global network identity — wallet address. This is the UID. */
+  walletAddress: string;
+  /** Human-readable name */
+  friendlyName: string;
+  /** Base HTTP endpoint for this agent (e.g. http://host:port) */
+  endpoint: string;
+  /** Protocol capabilities this agent advertises */
+  capabilities: string[];
+  /** Ed25519 public key (hex) for signature verification */
+  publicKey?: string;
+  /** Unix epoch ms when this card was generated */
+  issuedAt: number;
+}
 
 export interface AttestationLink {
   /** agentId of the sender */
@@ -155,15 +171,11 @@ export interface MaestroMessage {
   /** Unix epoch ms — set by original sender, immutable */
   timestamp: number;
 
-  /**
-   * Optional provenance chain.
-   * Agents and Venues determine when required based on risk profile.
-   * See ProvenancePolicy for Venue-level enforcement.
-   */
-  provenance?: Provenance;
-
   /** Optional Stage context */
   stageId?: string;
+
+  /** The Venue/Connection this message belongs to */
+  venueId?: string;
 
   /** replyTo message ID for threading / backwards provenance */
   replyTo?: string;
@@ -173,6 +185,22 @@ export interface MaestroMessage {
 
   /** Optional structured payload — type-specific data (e.g. venue:invitation details, blackboard:update entry) */
   payload?: Record<string, unknown>;
+
+  /**
+   * Optional protocol extensions map.
+   * Key: extension name (e.g. 'maestro.economic_signal')
+   * Value: extension payload object
+   */
+  extensions?: Record<string, unknown>;
+
+  /**
+   * Explicit broadcast flag (CL-proteus-5d568a80 Item B).
+   * When true, this message fans out to all global handlers even
+   * without a venueId.  Without this flag, a no-venueId message is
+   * treated as point-to-point and the dispatch logs a
+   * broadcast_blocked_no_scope event.
+   */
+  broadcast?: boolean;
 }
 
 // ----------------------------------------------------------

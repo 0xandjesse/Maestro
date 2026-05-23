@@ -117,19 +117,19 @@ export class MdnsRegistry extends EventEmitter {
   // mDNS handlers
   // ----------------------------------------------------------
 
-  private handleQuery(query: mdns.QueryPacket): void {
+  private handleQuery(query: any): void {
     const isForUs = query.questions.some(
-      q => q.name === SERVICE_TYPE && q.type === 'PTR'
+      (q: any) => q.name === SERVICE_TYPE && q.type === 'PTR'
     );
     if (isForUs) {
       this.announce();
     }
   }
 
-  private handleResponse(response: mdns.ResponsePacket): void {
+  private handleResponse(response: any): void {
     // Extract PTR records pointing to our service type
     const ptrs = response.answers.filter(
-      a => a.name === SERVICE_TYPE && a.type === 'PTR'
+      (a: any) => a.name === SERVICE_TYPE && a.type === 'PTR'
     );
 
     for (const ptr of ptrs) {

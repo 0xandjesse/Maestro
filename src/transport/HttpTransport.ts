@@ -24,6 +24,7 @@ import { SqliteBlackboard } from '../blackboard/SqliteBlackboard.js';
 import { BlackboardEntry } from '../blackboard/types.js';
 import { ConnectionManager } from '../connection/ConnectionManager.js';
 import { JoinRequest, ConnectionEvent } from '../connection/types.js';
+import { extractEconomicSignal, renderEconomicSignal } from '../extensions/economic_signal.js';
 
 export interface HttpTransportConfig {
   port: number;
@@ -228,43 +229,54 @@ export class HttpTransport {
         return;
       }
 
-      try {
-        const result = await this.router.dispatch(message);
+      // Respond immediately — dispatch and wake calls are async and must not block the HTTP response.
+      // Holding the response open caused subsequent inbound messages to queue/timeout.
+      res.status(200).json({ accepted: true });
 
-        if (!result.accepted) {
-          res.status(422).json({ accepted: false, reason: result.reason });
-          return;
-        }
+      // Dispatch and wake async (fire-and-forget from the HTTP handler's perspective)
+      setImmediate(async () => {
+        try {
+          const result = await this.router.dispatch(message);
 
-        // Handle blackboard:update - apply to local SQLiteBlackboard
-        if (message.type === 'blackboard:update') {
-          this.applyBlackboardUpdate(message);
-        }
+          if (!result.accepted) {
+            console.warn('[HttpTransport] Dispatch rejected:', result.reason);
+            return;
+          }
 
-        // Wake OpenClaw agent session if adapter is configured
-        if (this.openclawAdapter) {
-          // Don't await - fire and forget
-          this.openclawAdapter.wakeAgent(this.agentId, message).catch((err: unknown) => {
-            console.error('[HttpTransport] OpenClaw wake failed:', err);
-          });
-        }
-        // Wake Hermes agent session if adapter is configured.
-        // Guard: only wake Hermes if THIS agent is the intended recipient.
-        // Waking on every inbound message (including replies Hermes just sent)
-        // causes an infinite self-reply loop.
-        const recipientIsUs = !message.recipient || message.recipient === this.agentId || message.recipient === '*';
-        const senderIsUs = message.sender?.agentId === this.agentId;
-        if (this.hermesAdapter && recipientIsUs && !senderIsUs) {
-          this.hermesAdapter.wakeAgent(this.agentId, message).catch((err: unknown) => {
-            console.error('[HttpTransport] Hermes wake failed:', err);
-          });
-        }
+          // Handle blackboard:update - apply to local SQLiteBlackboard
+          if (message.type === 'blackboard:update') {
+            this.applyBlackboardUpdate(message);
+          }
 
-        res.status(200).json({ accepted: true });
-      } catch (err: unknown) {
-        console.error('[HttpTransport] Dispatch error:', err);
-        res.status(500).json({ accepted: false, reason: 'Internal error' });
-      }
+          // Handle economic_signal extension — log with mandatory disclaimer
+          if (message.type === 'financial' && message.extensions) {
+            const signal = extractEconomicSignal(message.extensions);
+            if (signal) {
+              console.log('[HttpTransport] Received economic intent signal:\n' + renderEconomicSignal(signal));
+            }
+          }
+
+          // Wake OpenClaw agent session if adapter is configured
+          if (this.openclawAdapter) {
+            this.openclawAdapter.wakeAgent(this.agentId, message).catch((err: unknown) => {
+              console.error('[HttpTransport] OpenClaw wake failed:', err);
+            });
+          }
+          // Wake Hermes agent session if adapter is configured.
+          // Guard: only wake Hermes if THIS agent is the intended recipient.
+          // Waking on every inbound message (including replies Hermes just sent)
+          // causes an infinite self-reply loop.
+          const recipientIsUs = !message.recipient || message.recipient === this.agentId || message.recipient === '*';
+          const senderIsUs = message.sender?.agentId === this.agentId;
+          if (this.hermesAdapter && recipientIsUs && !senderIsUs) {
+            this.hermesAdapter.wakeAgent(this.agentId, message).catch((err: unknown) => {
+              console.error('[HttpTransport] Hermes wake failed:', err);
+            });
+          }
+        } catch (err: unknown) {
+          console.error('[HttpTransport] Dispatch error:', err);
+        }
+      });
     });
 
     // ----- POST /webhook - inbound from OpenClaw tool (maestro_send) -----
@@ -353,6 +365,17 @@ export class HttpTransport {
           webhookEndpoint: joinRequest.webhookEndpoint,
           capabilities:    joinRequest.capabilities,
         });
+
+        // If the remote agent sent a contact card with an endpoint, prefer that
+        if (joinRequest.contactCard?.endpoint) {
+          this.registry.register({
+            agentId:         joinRequest.agentId,
+            webhookEndpoint: `${joinRequest.contactCard.endpoint}/message`,
+            capabilities:    joinRequest.contactCard.capabilities,
+            publicKey:       joinRequest.contactCard.publicKey,
+            wallet:          joinRequest.contactCard.walletAddress,
+          });
+        }
 
         // Notify existing members (fire-and-forget)
         this.notifyMembersJoined(connectionId, joinRequest.agentId).catch(() => {});

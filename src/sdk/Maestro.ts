@@ -36,12 +36,13 @@ import { ConnectionBroker, ConnectionBrokerConfig, ConnectionInvitation } from '
 import { ConnectionStore, StoredConnection } from '../transport/ConnectionStore.js';
 import { MdnsDiscovery } from '../transport/MdnsDiscovery.js';
 import { OpenClawAdapter } from '../plugin/OpenClawAdapter.js';
+import { verificationGate } from '../trust/VenueBouncer.js';
+import { BouncerResult } from '../trust/VenueBouncer.js';
 import {
   MaestroConfig,
   MessageHandler,
   SendOptions,
 } from '../transport/types.js';
-import { enforceProvenancePolicy } from '../connection/provenanceEnforcer.js';
 
 // ----------------------------------------------------------
 // ConnectionHandle - what agents interact with per-Connection
@@ -155,6 +156,31 @@ export class ConnectionHandle {
     });
   }
 
+  /**
+   * Send a message to an agent in a DIFFERENT Venue.
+   * Useful when Agent A in Venue X needs Agent B's input from Venue Y.
+   */
+  async crossVenueSend(
+    recipientId: string,
+    content: string,
+    targetVenueId: string,
+    options: SendOptions = {},
+  ): Promise<MaestroMessage> {
+    this.requirePermission('message:send');
+    const message = this.maestro.router.buildMessage('direct', content, recipientId, {
+      ...options,
+      venueId: targetVenueId,
+      stageId: this.connectionId,
+    });
+    // Deliver via transport if available
+    if (this.maestro.httpTransport) {
+      await this.maestro.httpTransport.send(message).catch((err: unknown) => {
+        console.error('[ConnectionHandle] crossVenueSend transport error:', err);
+      });
+    }
+    return message;
+  }
+
   // ----------------------------------------------------------
   // Message handling
   // ----------------------------------------------------------
@@ -233,6 +259,8 @@ export class ConnectionHandle {
 
 export class Maestro {
   readonly agentId: string;
+  /** Global network identity — wallet address. This is the UID. */
+  readonly wallet?: string;
   readonly connectionManager: ConnectionManager;
   readonly router: MessageRouter;
 
@@ -253,8 +281,9 @@ export class Maestro {
   constructor(config: MaestroConfig) {
     this.config = config;
     this.agentId = config.agentId;
+    this.wallet = config.wallet;
     this.connectionManager = new ConnectionManager();
-    this.router = new MessageRouter(config.agentId, this.connectionManager);
+    this.router = new MessageRouter(config.agentId, this.connectionManager, this.wallet);
   }
 
   // ----------------------------------------------------------
@@ -311,11 +340,22 @@ export class Maestro {
       );
       this.connectionBroker = new ConnectionBroker(
         this.agentId,
+        this.wallet,
         this.httpTransport,
         this.registry,
         this.connectionManager,
         { localPort: port },
       );
+
+      // Set the host contact card on the ConnectionManager for non-local handshakes
+      this.connectionManager.setHostContactCard({
+        walletAddress: this.wallet ?? this.agentId,
+        friendlyName: this.agentId,
+        endpoint: `http://127.0.0.1:${port}`,
+        capabilities: this.config.capabilities ?? [],
+        publicKey: this.config.publicKey,
+        issuedAt: Date.now(),
+      });
 
       // Wire BlackboardBridge for cross-process push
       this.blackboardBridge = new BlackboardBridge(
@@ -440,6 +480,14 @@ export class Maestro {
       },
       webhookEndpoint: `http://localhost:${this.config.webhookPort ?? 3001}/maestro/webhook`,
       capabilities: [],
+      contactCard: {
+        walletAddress: this.wallet ?? this.agentId,
+        friendlyName: this.config.agentId,
+        endpoint: `http://localhost:${this.config.webhookPort ?? 3001}`,
+        capabilities: this.config.capabilities ?? [],
+        publicKey: this.config.publicKey,
+        issuedAt: Date.now(),
+      },
       ...options,
     };
 
@@ -455,6 +503,10 @@ export class Maestro {
           // Store reference - use the host's ConnectionManager for all connection ops
           this._sharedManagers.set(connectionId, hostManager);
         }
+      }
+      // Store host contact card if provided
+      if (response.hostContactCard) {
+        this.connectionManager.setHostContactCard(response.hostContactCard);
       }
       this.makeHandle(connectionId, hostManager);
     }
@@ -492,9 +544,53 @@ export class Maestro {
     this.router.on(type, handler);
   }
 
-  /** Dispatch an inbound message (called by webhook receiver) */
+  /** Dispatch an inbound message (called by webhook receiver).
+   *  If the message targets a Venue with a provenancePolicy, the Venue
+   *  Bouncer gate runs first. Messages that fail the gate are dropped. */
   async receive(message: MaestroMessage): Promise<{ accepted: boolean; reason?: string }> {
+    // Venue gate: if message has a venueId, check the Connection's provenance policy
+    if (message.venueId) {
+      const handle = this.connectionHandles.get(message.venueId);
+      if (handle) {
+        const connection = this.getManagerForConnection(message.venueId).get(message.venueId);
+        if (connection?.rules.provenancePolicy) {
+          const gate: BouncerResult = verificationGate(message, connection.rules.provenancePolicy);
+          if (!gate.allowed) {
+            return { accepted: false, reason: gate.reason ?? 'venue_policy_rejected' };
+          }
+        }
+      }
+    }
     return this.router.dispatch(message);
+  }
+
+  /**
+   * Route an incoming message to the correct Connection handle.
+   * Uses message.venueId if present. Falls back to the only handle if there's just one.
+   * Returns undefined when multiple handles + no venueId (broadcast to all).
+   */
+  private _routeToConnection(message: MaestroMessage): ConnectionHandle | undefined {
+    if (message.venueId) {
+      return this.connectionHandles.get(message.venueId);
+    }
+    // Fallback: if only one handle, use it
+    if (this.connectionHandles.size === 1) {
+      return this.connectionHandles.values().next().value;
+    }
+    // Multiple handles, no venueId — broadcast to all
+    return undefined;
+  }
+
+  /**
+   * Register a handler for messages in a specific Connection only.
+   * Different from global onMessage() which fires for all Connections.
+   */
+  onConnectionMessage(
+    connectionId: string,
+    type: MessageType | '*',
+    handler: MessageHandler,
+  ): void {
+    this.router.onVenue(connectionId, type, handler);
   }
 
   // ----------------------------------------------------------
