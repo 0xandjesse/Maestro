@@ -103,25 +103,32 @@ def format_maestro_display(message: dict, mode: str) -> Optional[str]:
     if mode == "off":
         return None
     elif mode == "short":
-        sender = message.get("from", message.get("sender", "unknown"))
         recipient = message.get("to", "")
-        icon = "📨" if msg_type == "maestro_out" else "📥"
-        subject = message.get("subject", subject) or subject
-        return f"{icon} Maestro: {sender} -> {recipient}:\n\n<i>{subject}</i>"
+        if msg_type == "maestro_out":
+            # Sender receipt: direction is FROM me TO recipient
+            return f"📤 Sent to {recipient}:\n\n<i>{subject}</i>"
+        else:
+            # Incoming notification
+            return f"📥 Maestro: {sender} -> {recipient}:\n\n<i>{subject}</i>"
     elif mode == "long":
-        sender = message.get("from", message.get("sender", "unknown"))
         recipient = message.get("to", "")
-        icon = "📨" if msg_type == "maestro_out" else "📥"
-        header = f"{icon} Maestro: {sender} -> {recipient}:"
-        body = f"<i>{content}</i>" if content else ""
-        return f"{header}\n\n{body}"
+        if msg_type == "maestro_out":
+            # Sender receipt
+            header = f"📤 Sent to {recipient}:"
+            body = f"<i>{content}</i>" if content else ""
+            return f"{header}\n\n{body}"
+        else:
+            # Incoming notification
+            header = f"📥 Maestro from {sender} to {recipient}:"
+            body = f"<i>{content}</i>" if content else ""
+            return f"{header}\n\n{body}"
     else:
         # Default fallback — long mode
-        icon = "📨" if msg_type == "maestro_out" else "📥"
-        header = f"{icon} Maestro [{msg_id}] from {sender}:"
+        sender = message.get("from", message.get("sender", "unknown"))
+        recipient = message.get("to", "")
+        header = f"📥 Maestro [{msg_id}] from {sender}:"
         body = f"<i>{content}</i>" if content else ""
         return f"{header}\n\n{body}"
-
 
 async def _send_telegram(token: str, chat_id: str, text: str, parse_mode: str = "Markdown") -> dict:
     """Send a message via Telegram Bot API."""
