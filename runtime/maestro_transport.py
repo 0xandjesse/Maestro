@@ -28,6 +28,13 @@ except Exception:
     _LOG_WRITER_AVAILABLE = False
     def _log_message(*a, **kw): pass
 
+try:
+    import maestro_crypto as _crypto
+    CRYPTO_AVAILABLE = True
+except Exception:
+    CRYPTO_AVAILABLE = False
+    _crypto = None
+
 # Optional: Google Calendar API for native trigger engine
 CALENDAR_AVAILABLE = False
 try:
@@ -39,6 +46,61 @@ except ImportError:
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [maestro] %(message)s', datefmt='%H:%M:%S')
 log = logging.getLogger(__name__)
+
+# Subject extraction for short/long display modes
+def extract_subject(output: str, max_len: int = 80) -> Optional[str]:
+    """Extract a subject line from LLM output.
+
+    Searches for an explicit ``Subject: <text>`` line.  Returns None if
+    the line is missing — the caller must decide whether to reject the
+    message or fall back to the sentence extractor.
+    """
+    if not output:
+        return None
+
+    text = output.strip()
+    m = re.search(r'^Subject:\s*(.+?)(?:\n|$)', text, re.IGNORECASE | re.MULTILINE)
+    if m:
+        subject = m.group(1).strip()
+        if len(subject) > max_len:
+            subject = subject[:max_len - 3] + "..."
+        return subject
+
+    return None
+
+
+def fallback_subject(output: str, max_len: int = 80) -> str:
+    """Fallback subject when explicit Subject: line is missing. Skips ack prefixes."""
+    if not output:
+        return "(no content)"
+
+    text = output.strip()
+    sentences = re.split(r'[.!?\n]+', text)
+    sentences = [s.strip() for s in sentences if s.strip()]
+
+    if not sentences:
+        return text[:max_len]
+
+    ack_words = ("acknowledged", "copy", "got it", "understood", "roger", "received",
+                 "noted", "standing by", "on deck", "will do", "ready", "hello", "hi ",
+                 "hey", "greetings", "thanks", "thank you", "sure", "ok", "okay",
+                 "loop closed", "closing", "no further action", "confirmed")
+
+    subject = None
+    for s in sentences:
+        lower = s.lower()
+        if any(lower.startswith(w) or lower == w for w in ack_words):
+            continue
+        subject = s
+        break
+
+    if subject is None:
+        subject = max(sentences, key=len) if sentences else text[:max_len]
+
+    if len(subject) > max_len:
+        subject = subject[:max_len - 3] + "..."
+
+    return subject
 
 DEFAULT_CONFIG = {
     "agentId": "hermes-lex", "port": 3844,
@@ -66,7 +128,7 @@ class LocalRegistry:
             except: pass
         return []
     def _save(self, data): self.path.write_text(json.dumps(data, indent=2))
-    def register(self, agent_id, webhook_endpoint, capabilities=None):
+    def register(self, agent_id, webhook_endpoint, capabilities=None, public_key=None):
         with self._lock:
             fd = None
             try:
@@ -80,8 +142,11 @@ class LocalRegistry:
                 except Exception:
                     data = []
                 data = [e for e in data if e.get("agentId") != agent_id]
-                data.append({"agentId": agent_id, "webhookEndpoint": webhook_endpoint,
-                    "capabilities": capabilities or [], "registeredAt": int(time.time()*1000), "lastSeen": int(time.time()*1000)})
+                entry = {"agentId": agent_id, "webhookEndpoint": webhook_endpoint,
+                    "capabilities": capabilities or [], "registeredAt": int(time.time()*1000), "lastSeen": int(time.time()*1000)}
+                if public_key:
+                    entry["publicKey"] = public_key
+                data.append(entry)
                 payload = json.dumps(data, indent=2)
                 os.ftruncate(fd, 0)
                 os.lseek(fd, 0, os.SEEK_SET)
@@ -96,29 +161,12 @@ class LocalRegistry:
             for e in self._load():
                 if e.get("agentId") == agent_id: return e
             return None
-    def unregister(self, agent_id):
+    def get_public_key(self, agent_id):
         with self._lock:
-            fd = None
-            try:
-                fd = os.open(str(self.path), os.O_RDWR | os.O_CREAT)
-                fcntl.flock(fd, fcntl.LOCK_EX)
-                size = os.lseek(fd, 0, os.SEEK_END)
-                os.lseek(fd, 0, os.SEEK_SET)
-                raw = os.read(fd, size).decode() if size else "[]"
-                try:
-                    data = json.loads(raw) if raw.strip() else []
-                except Exception:
-                    data = []
-                data = [e for e in data if e.get("agentId") != agent_id]
-                payload = json.dumps(data, indent=2)
-                os.ftruncate(fd, 0)
-                os.lseek(fd, 0, os.SEEK_SET)
-                os.write(fd, payload.encode())
-                log.info(f"Unregistered {agent_id}")
-            finally:
-                if fd is not None:
-                    fcntl.flock(fd, fcntl.LOCK_UN)
-                    os.close(fd)
+            for e in self._load():
+                if e.get("agentId") == agent_id:
+                    return e.get("publicKey")
+            return None
 
 class HermesClient:
     def __init__(self, api_url, api_key, conversation, agent_id=None):
@@ -652,6 +700,9 @@ class MaestroTransport:
         self.bb_root.mkdir(parents=True, exist_ok=True)
         self._loopback_count = 0  # diagnostic counter
         self.started_at = None
+        self._cooldown_until = 0  # timestamp — suppress inter-agent LLM processing until this time
+        self._answered_ids = set()  # track message IDs we've replied to (prevents ack-loop chains)
+        self._sent_subjects: dict = {}  # agent_id -> deque of (subject_hash, timestamp) — echo suppression
         # Loop prevention state
         self._last_content: dict = {}  # sender_id -> (content_hash, timestamp)
         self._sender_message_times: dict = defaultdict(deque)  # sender_id -> deque of timestamps
@@ -680,6 +731,49 @@ class MaestroTransport:
         # Calendar trigger engine (opt-in via config)
         self.calendar_watcher = None
         self._setup_calendar_watcher(config)
+        # Zero Trust provenance
+        self._zerotrust_enabled = False
+        self._private_key = None
+        self._public_key = None
+        self._load_or_generate_keys()
+
+    def _load_or_generate_keys(self):
+        """Load MAESTRO_PRIVATE_KEY/PUBLIC_KEY from agent .env or generate and append."""
+        env_path = Path(os.environ.get("HERMES_HOME", "/home/andjesse/.hermes")) / ".env"
+        pk = os.environ.get("MAESTRO_PRIVATE_KEY")
+        pub = os.environ.get("MAESTRO_PUBLIC_KEY")
+        if pk and pub:
+            self._private_key = pk
+            self._public_key = pub
+            log.info("[ZT] Keys loaded from environment")
+            return
+        # Try reading from .env if env vars not set
+        if env_path.exists():
+            for line in env_path.read_text().splitlines():
+                if line.startswith("MAESTRO_PRIVATE_KEY="):
+                    pk = line.split("=", 1)[1].strip().strip('"\'')
+                elif line.startswith("MAESTRO_PUBLIC_KEY="):
+                    pub = line.split("=", 1)[1].strip().strip('"\'')
+        if pk and pub:
+            self._private_key = pk
+            self._public_key = pub
+            os.environ["MAESTRO_PRIVATE_KEY"] = pk
+            os.environ["MAESTRO_PUBLIC_KEY"] = pub
+            log.info("[ZT] Keys loaded from .env")
+            return
+        # Generate new pair
+        if CRYPTO_AVAILABLE and _crypto:
+            kp = _crypto.generate_key_pair()
+            self._private_key = kp["private_key"]
+            self._public_key = kp["public_key"]
+            os.environ["MAESTRO_PRIVATE_KEY"] = self._private_key
+            os.environ["MAESTRO_PUBLIC_KEY"] = self._public_key
+            with open(env_path, "a") as f:
+                f.write(f"\nMAESTRO_PRIVATE_KEY={self._private_key}\n")
+                f.write(f"MAESTRO_PUBLIC_KEY={self._public_key}\n")
+            log.info(f"[ZT] New key pair generated and appended to {env_path}")
+        else:
+            log.warning("[ZT] Crypto unavailable — cannot generate keys")
 
 
     def _size_bytes(self, payload):
@@ -697,7 +791,7 @@ class MaestroTransport:
             return web.json_response({"accepted": False, "reason": "Invalid message format"}, status=400)
 
         msg_id = message.get("id") or ""
-        sender = message.get("sender",{}).get("agentId","?")
+        sender = message.get("sender",{}).get("agentId","unknown")
         msg_type = message.get("type")
 
         # Prevent duplicate/broadcast loop
@@ -785,19 +879,63 @@ class MaestroTransport:
         if recipient == "broadcast" or recipient == "*":
             asyncio.create_task(self._broadcast_fanout(message))
 
+        # -- Cooldown commands (/shutup, /stfu) --
+        content = message.get("content", "")
+        if isinstance(content, str):
+            stripped = content.strip()
+            if stripped == "/shutup":
+                self._cooldown_until = time.time() + 30
+                log.info(f"Cooldown: /shutup — suppressing inter-agent messages for 30s on {self.agent_id}")
+                return web.json_response({"accepted": True, "cooldown": 30, "agentId": self.agent_id})
+            elif stripped == "/stfu":
+                self._cooldown_until = time.time() + 30
+                log.info(f"Cooldown: /stfu — fanning out to all agents for 30s")
+                # Broadcast /stfu to all known peers so every agent silences
+                asyncio.create_task(self._broadcast_stfu(
+                    original_msg_id=message.get("id", ""),
+                    sender_id=sender
+                ))
+                return web.json_response({"accepted": True, "cooldown": 30, "broadcast": True, "agentId": self.agent_id})
+            # Zero Trust toggle
+            elif stripped == "/zerotrust_on":
+                self._zerotrust_enabled = True
+                log.info(f"[ZT] Zero Trust enabled on {self.agent_id}")
+                return web.json_response({"accepted": True, "zerotrust": True, "agentId": self.agent_id})
+            elif stripped == "/zerotrust_off":
+                self._zerotrust_enabled = False
+                log.info(f"[ZT] Zero Trust disabled on {self.agent_id}")
+                return web.json_response({"accepted": True, "zerotrust": False, "agentId": self.agent_id})
+
+        # Standard P2P -> Hermes (skip if cooldown active)
+        if time.time() < self._cooldown_until:
+            remaining = int(self._cooldown_until - time.time())
+            log.info(f"Cooldown active ({remaining}s left) — accepted but suppressed message from {sender}")
+            return web.json_response({"accepted": True, "suppressed": True, "cooldown_remaining": remaining, "agentId": self.agent_id})
+
+        # Zero Trust inbound verification — only for messages from OTHER agents
+        if self._zerotrust_enabled and sender and sender != self.agent_id and CRYPTO_AVAILABLE and _crypto:
+            msg_prov = message.get("provenance")
+            if msg_prov and msg_prov.get("originalSignature"):
+                content = message.get("content", "")
+                ts = message.get("timestamp", 0)
+                payload = _crypto.original_signature_payload(content, ts, sender)
+                sender_pubkey = self.registry.get_public_key(sender)
+                if sender_pubkey and _crypto.verify(payload, msg_prov["originalSignature"], sender_pubkey):
+                    log.info(f"[ZT] Signature verified: {sender}")
+                else:
+                    log.warning(f"[ZT] SIGNATURE FAILED: {sender} — dropping message")
+                    return web.json_response({"accepted": False, "reason": "zt_signature_failed", "agentId": self.agent_id})
+            else:
+                log.warning(f"[ZT] Missing provenance from {sender} — dropping message")
+                return web.json_response({"accepted": False, "reason": "zt_missing_provenance", "agentId": self.agent_id})
+
         # Auto-log tasks via message type hints
         if msg_type == "task:start" or message.get("action") == "task:start":
             desc = message.get("description", message.get("content", "Task started")).strip()
             ts = int(message.get("timestamp", time.time() * 1000))
-            entry = {
-                "type": "start",
-                "agent_id": self.agent_id,
-                "description": desc,
-                "started_at": ts,
-                "started_at_iso": datetime.fromtimestamp(ts / 1000, tz=timezone.utc).isoformat(),
-                "finished_at": None,
-                "duration_sec": None,
-            }
+            entry = {"type": "start", "agent_id": self.agent_id, "description": desc,
+                "started_at": ts, "started_at_iso": datetime.fromtimestamp(ts / 1000, tz=timezone.utc).isoformat(),
+                "finished_at": None, "duration_sec": None}
             self._append_task_log(self.agent_id, entry)
             log.info(f"Task START: {desc}")
         elif msg_type == "task:finish" or message.get("action") == "task:finish":
@@ -807,7 +945,6 @@ class MaestroTransport:
             if updated:
                 log.info(f"Task FINISH: {updated['description']} in {updated.get('duration_sec')}s")
 
-        # Standard P2P -> Hermes
         asyncio.create_task(self._process_message(message))
         return web.json_response({"accepted": True})
 
@@ -860,7 +997,7 @@ class MaestroTransport:
             await self._route_system_reply(message, f"Error reading blackboard: {type(e).__name__}: {e}")
 
     async def _process_bb_search(self, message):
-        sender_id = message.get("sender", {}).get("agentId", "?")
+        sender_id = message.get("sender", {}).get("agentId", "unknown")
         board_id = message.get("boardId", "default")
         prefix = message.get("prefix")
         query = message.get("query")
@@ -876,7 +1013,7 @@ class MaestroTransport:
             await self._route_system_reply(message, f"BB_SEARCH ERROR: {type(e).__name__}: {e}")
 
     async def _process_bb_delete(self, message):
-        sender_id = message.get("sender", {}).get("agentId", "?")
+        sender_id = message.get("sender", {}).get("agentId", "unknown")
         board_id = message.get("boardId", "default")
         key = message.get("key")
         prefix = message.get("prefix")
@@ -894,7 +1031,7 @@ class MaestroTransport:
             await self._route_system_reply(message, f"BB_DELETE ERROR: {type(e).__name__}: {e}")
 
     async def _process_bb_recall(self, message):
-        sender_id = message.get("sender", {}).get("agentId", "?")
+        sender_id = message.get("sender", {}).get("agentId", "unknown")
         target = message.get("targetAgent")
         query_type = message.get("queryType", "snapshot")
         query = message.get("query")
@@ -958,7 +1095,7 @@ class MaestroTransport:
         synchronous response, and long-running tasks (write + upload,
         multi-step research, etc.) work without any timeout concern.
         """
-        sender = message.get("sender", {}).get("agentId", "?")
+        sender = message.get("sender", {}).get("agentId", "unknown")
         content = message.get("content", "")
         log.info(f"Directive from {sender} — spawning background task: {content[:200]}")
         task = asyncio.create_task(self._process_message(message))
@@ -987,6 +1124,20 @@ class MaestroTransport:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             ok = sum(1 for r in results if not isinstance(r, Exception))
             log.info(f"Broadcast {msg_id}: {ok}/{len(tasks)} delivered")
+
+    async def _broadcast_stfu(self, original_msg_id, sender_id):
+        """Broadcast /stfu to all known peers so every agent silences for 30s."""
+        log.info(f"Broadcasting /stfu from {sender_id} to all peers")
+        msg = {
+            "id": f"stfu-{original_msg_id or str(uuid.uuid4())}",
+            "type": "direct",
+            "sender": {"agentId": self.agent_id},
+            "recipient": "*",
+            "content": "/shutup",
+            "timestamp": int(time.time() * 1000),
+            "version": self.config.get("version", "3.2"),
+        }
+        await self._broadcast_fanout(msg)
 
     async def _deliver(self, endpoint, message):
         async with ClientSession() as s:
@@ -1028,7 +1179,7 @@ class MaestroTransport:
             # (agent responds → sender resends the same error → repeat forever)
             content = message.get("content", "")
             if "402" in content or "Insufficient credits" in content or "HTTP 402" in content:
-                log.warning(f"Dropping billing error message from {message.get('sender', {}).get('agentId', '?')} — suppressing to avoid reply loop")
+                log.warning(f"Dropping billing error message from {message.get('sender', {}).get('agentId', 'unknown')} — suppressing to avoid reply loop")
                 return
 
             # --- Loop prevention: dedup + rate limiting ---
@@ -1059,6 +1210,43 @@ class MaestroTransport:
                 log.warning(f"[LOOP] Rate limit exceeded: {sender_id} sent {len(times)} messages in {self.RATE_LIMIT_WINDOW}s (max {self.RATE_LIMIT_MAX})")
                 asyncio.create_task(self._notify_loop_detected(sender_id, "rate_limit", content[:120]))
                 return
+
+            # 3. Reply-chain suppression — prevent ack-of-ack-of-ack loops
+            reply_to = message.get("inReplyTo") or message.get("reply_to")
+            if reply_to:
+                # If we already answered this thread, suppress
+                if reply_to in self._answered_ids:
+                    log.info(f"[LOOP] Suppressing reply to already-answered message {reply_to} from {sender_id}")
+                    return
+                # If this is a reply to a reply (third+ hop), and content is short ack-like, suppress
+                # If this is a reply to a reply (third+ hop), check for ack patterns in the first sentence
+                # "Acknowledged, Proteus. Current operational posture: idle..." — starts with ack
+                ack_starts = ("standing by", "copy", "acknowledged", "ready", "on deck", "ack",
+                             "received", "got it", "roger", "will do", "understood", "noted",
+                             "loop closed", "closing the loop", "no further action")
+                lower = content.lower().rstrip('.')
+                # Check first 80 chars — catches ack greetings even in longer messages
+                first_words = lower[:80]
+                if any(first_words.startswith(w) for w in ack_starts):
+                    log.info(f"[LOOP] Suppressing ack-of-ack from {sender_id} (reply_to={reply_to}, starts_with={content[:40].strip()})")
+                    return
+
+            # 4. Subject echo suppression — if we recently sent subject X to this agent,
+            #    and they reply with subject X, it's our own message bouncing back.
+            inbound_subject = message.get("subject", "")
+            if inbound_subject and sender_id in self._sent_subjects:
+                from collections import deque
+                now_ts = time.time()
+                subject_hash = hash(inbound_subject)
+                recent = deque(
+                    (h, t) for h, t in self._sent_subjects.get(sender_id, [])
+                    if now_ts - t < self.DEDUP_WINDOW
+                )
+                self._sent_subjects[sender_id] = recent
+                if any(h == subject_hash for h, _ in recent):
+                    log.info(f"[LOOP] Suppressing subject echo from {sender_id}: \"{inbound_subject[:60]}\"")
+                    asyncio.create_task(self._notify_loop_detected(sender_id, "subject_echo", inbound_subject[:120]))
+                    return
             # --- End loop prevention ---
 
             log.debug(f"Forward to Hermes: {message.get('id')}")
@@ -1066,6 +1254,29 @@ class MaestroTransport:
             if not output:
                 log.warning("No output from Hermes — not routing reply")
                 return
+
+            # Subject enforcement — every outbound Maestro reply MUST carry a Subject
+            outbound_subject = extract_subject(output)
+            if outbound_subject is None:
+                log.warning(f"[SUBJECT] Agent {self.agent_id} failed to include Subject: line — bouncing error")
+                sender_id = message["sender"]["agentId"]
+                sender_reg = self.registry.lookup(sender_id)
+                if sender_reg:
+                    error_reply = {
+                        "id": str(uuid.uuid4()),
+                        "type": "error",
+                        "content": f"Subject: Message rejected — missing Subject line\n\nAgent {self.agent_id} did not include a Subject: line in its response. All Maestro messages require a Subject line. Please re-send with a Subject: prefix.",
+                        "subject": "Message rejected — missing Subject line",
+                        "sender": {"agentId": self.agent_id},
+                        "recipient": sender_id,
+                        "inReplyTo": message.get("id"),
+                        "timestamp": int(time.time() * 1000),
+                        "version": self.config["version"],
+                    }
+                    endpoint = sender_reg["webhookEndpoint"]
+                    asyncio.create_task(self._deliver(endpoint, error_reply))
+                return
+
             # Directives are fire-and-forget: the agent delivers results directly
             # (via send_message to TG, checklist_complete_item, etc.).
             # Do NOT bounce the LLM response back through Maestro — it creates
@@ -1073,6 +1284,20 @@ class MaestroTransport:
             if message.get("type") == "directive":
                 log.info(f"Directive complete — suppressing Maestro reply (agent delivers directly)")
                 return
+            # Zero Trust outbound signing
+            provenance = None
+            if self._zerotrust_enabled and self._private_key and output and CRYPTO_AVAILABLE and _crypto:
+                ts = int(time.time() * 1000)
+                payload = _crypto.original_signature_payload(output, ts, self.agent_id)
+                original_sig = _crypto.sign(payload, self._private_key)
+                content_hash = _crypto.hash_string(output)
+                provenance = {
+                    "mode": "full",
+                    "chain": [],
+                    "originalSignature": original_sig,
+                    "contentHash": content_hash,
+                }
+
             # NEW: Outbound mirror — if maestro_out is ON, surface reply to gateway
             try:
                 visibility_path = Path(os.environ.get("HERMES_HOME", "/home/andjesse/.hermes")) / "maestro_visibility.json"
@@ -1081,11 +1306,12 @@ class MaestroTransport:
                     profile = self.agent_id
                     if isinstance(vis, dict) and profile in vis and vis[profile].get("out", False):
                         bridge_url = self.config.get("gatewayBridgeUrl", "http://127.0.0.1:8644/maestro/notify")
-                        sender_id = message.get("sender", {}).get("agentId", "?")
+                        sender_id = message.get("sender", {}).get("agentId", "unknown")
                         mirror_payload = {
                             "agent_id": profile,
                             "from": profile,
                             "to": sender_id,
+                            "subject": outbound_subject,
                             "content": output,
                             "summary": f"Reply to {sender_id}: {output[:200]}",
                             "msg_type": "maestro_out",
@@ -1102,11 +1328,26 @@ class MaestroTransport:
                 "id": str(uuid.uuid4()),
                 "type": "direct",
                 "content": output,
+                "subject": extract_subject(output),
                 "sender": {"agentId": self.agent_id},
                 "recipient": sender_id,
+                "inReplyTo": message.get("id"),
                 "timestamp": int(time.time()*1000),
                 "version": self.config["version"],
             }
+            if provenance:
+                reply["provenance"] = provenance
+            # Record sent subject for echo suppression
+            sent_subject = reply.get("subject", "")
+            if sent_subject:
+                from collections import deque
+                if sender_id not in self._sent_subjects:
+                    self._sent_subjects[sender_id] = deque()
+                self._sent_subjects[sender_id].append((hash(sent_subject), time.time()))
+                # Prune old entries
+                if hasattr(self._sent_subjects[sender_id], '__len__') and len(self._sent_subjects[sender_id]) > 50:
+                    while len(self._sent_subjects[sender_id]) > 50:
+                        self._sent_subjects[sender_id].popleft()
             if message.get("stageId"):
                 reply["stageId"] = message["stageId"]
             endpoint = sender_reg["webhookEndpoint"]
@@ -1165,7 +1406,7 @@ class MaestroTransport:
             raw_content = str(raw_content)
         entry = {
             "id": message.get("id"),
-            "sender": message.get("sender", {}).get("agentId", "?"),
+            "sender": message.get("sender", {}).get("agentId", "unknown"),
             "type": message.get("type", "direct"),
             "content": raw_content[:2000],
             "timestamp": int(time.time() * 1000),
@@ -1348,7 +1589,7 @@ class MaestroTransport:
         except Exception:
             pass
         bridge_url = self.config.get("gatewayBridgeUrl", "http://127.0.0.1:8644/maestro/notify")
-        sender = message.get("sender", {}).get("agentId", "?")
+        sender = message.get("sender", {}).get("agentId", "unknown")
         try:
             content = message.get("content", "")
             # Telegram message limit is 4096 chars. Use full content up to that,
@@ -1358,9 +1599,11 @@ class MaestroTransport:
             payload = {
                 "agent_id": self.agent_id,
                 "from": sender,
+                "to": message.get("recipient", ""),
+                "subject": message.get("subject") or extract_subject(content) or fallback_subject(content),
                 "content": content,
                 "summary": content[:200],
-                "msg_type": message.get("type", "direct"),
+                "msg_type": "maestro_out" if sender == self.agent_id else message.get("type", "direct"),
             }
             async with ClientSession() as s:
                 async with s.post(bridge_url, json=payload, timeout=ClientTimeout(total=5)) as resp:
@@ -1665,7 +1908,7 @@ class MaestroTransport:
         for peer_id, peer_url in self.config.get("knownPeers", {}).items():
             self.registry.register(peer_id, peer_url)
             log.info(f"Seeded peer {peer_id} → {peer_url}")
-        self.registry.register(self.agent_id, f"http://127.0.0.1:{self.port}/message")
+        self.registry.register(self.agent_id, f"http://127.0.0.1:{self.port}/message", public_key=self._public_key)
         self.started_at = int(time.time()*1000)
         runner = web.AppRunner(self.app)
         await runner.setup()

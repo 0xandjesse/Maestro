@@ -116,63 +116,113 @@ async def _notify_handler(request: web.Request) -> web.Response:
     content = data.get("content", "")
     summary = data.get("summary", content[:200])
     msg_type = data.get("msg_type", "direct")
+    subject = data.get("subject", "")
 
     if not agent_id or not content:
         return web.json_response({"ok": False, "reason": "Missing agent_id or content"}, status=400)
 
-    # Determine platform (only Telegram for now)
     platform = data.get("platform", "telegram")
-    if platform == "telegram":
-        tcfg = _load_telegram_config(agent_id)
-        if not tcfg or not tcfg.get("token"):
-            return web.json_response(
-                {"ok": False, "reason": f"No Telegram token for {agent_id}"}, status=404
-            )
+    if platform != "telegram":
+        return web.json_response({"ok": False, "reason": f"Platform {platform} not supported yet"}, status=501)
+
+    async def _send_notification(to_agent_id, header, body, subject="", msg_type="direct", direction="in"):
+        """Deliver notification to one agent's Telegram chat. Returns (ok, detail).
+        
+        direction: "in" for incoming messages (📥), "out" for outgoing (📤).
+        """
+        display_mode = _get_display_mode(to_agent_id)
+        if display_mode == "off":
+            return True, "suppressed"
+        tcfg = _load_telegram_config(to_agent_id)
+        if not tcfg or not tcfg.get("token") or not tcfg.get("chat_id"):
+            return False, f"No Telegram config for {to_agent_id}"
         chat_id = tcfg["chat_id"]
-        if not chat_id:
-            return web.json_response(
-                {"ok": False, "reason": f"No TELEGRAM_ALLOWED_USERS for {agent_id}"}, status=404
-            )
-
-        # Telegram message limit: 4096 chars. If content is long, send as document
-        # with a short header; otherwise send inline.
-        TELEGRAM_MSG_LIMIT = 4096
-
-        # NEW: handle outbound mirror type
-        if msg_type == "maestro_out":
-            HEADER = f"📤 Outbound Maestro | to {data.get('to', from_agent)}:\n\n"
-        else:
-            HEADER = f"📨 Maestro {msg_type} from {from_agent}:\n\n"
-        full_text = HEADER + content
-
-        if len(full_text) <= TELEGRAM_MSG_LIMIT:
-            if msg_type == "maestro_out":
-                # Italicize the mirrored content for visual distinction;
-                # keep the header bold via * and wrap body in _
-                text = HEADER + "_" + content.replace("_", "\\_") + "_"
+        token = tcfg["token"]
+        emoji = "📨" if direction == "out" else "📥"
+        if display_mode == "short":
+            # Compact header + subject only, italicized
+            subj = (subject or body[:80])
+            subj = subj.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            sender_label = from_agent if direction == "out" else from_agent
+            recip_label = to_agent if direction == "out" else to_agent_id
+            short_text = f"{emoji} {sender_label} → {recip_label}:\n\n<i>{subj}</i>"
+            if len(short_text) <= 4096:
+                result = await _send_telegram(token, chat_id, short_text, parse_mode="HTML")
+                if result.get("ok"):
+                    return True, result.get("message_id")
+                return False, result.get("error", "Unknown")
             else:
-                # Escape Markdown special chars in content to avoid parse errors
-                text = full_text.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
-            result = await _send_telegram(tcfg["token"], chat_id, text, parse_mode="Markdown")
-            if result["ok"]:
-                return web.json_response({"ok": True, "message_id": result.get("message_id")})
-            return web.json_response({"ok": False, "reason": result["error"]}, status=502)
+                short = short_text[:200] + "...\n\n[Full message attached]"
+                short_result = await _send_telegram(token, chat_id, short, parse_mode="HTML")
+                file_result = await _send_telegram_document(
+                    token, chat_id, body.encode("utf-8"),
+                    filename=f"maestro_{from_agent}_{msg_type}.txt"
+                )
+                return (short_result.get("ok") or file_result.get("ok")), "ok"
+        # Long mode (default): header + italicized body
+        safe_header = header.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        safe_body = body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        formatted = f"{safe_header}<i>{safe_body}</i>"
+        if len(formatted) <= 4096:
+            result = await _send_telegram(token, chat_id, formatted, parse_mode="HTML")
+            if result.get("ok"):
+                return True, result.get("message_id")
+            return False, result.get("error", "Unknown")
         else:
-            # Send short header inline, content as file
-            if msg_type == "maestro_out":
-                short = HEADER + "_" + content[:200].replace("_", "\\_") + " ... [Full message attached]_"
-            else:
-                short = (HEADER + content[:200] + "...\n\n[Full message attached]").replace("_", "\\_")
-            short_result = await _send_telegram(tcfg["token"], chat_id, short, parse_mode="Markdown")
+            short = f"{safe_header}<i>{safe_body[:200]}...</i>\n\n[Full message attached]"
+            short_result = await _send_telegram(token, chat_id, short, parse_mode="HTML")
             file_result = await _send_telegram_document(
-                tcfg["token"], chat_id, content.encode("utf-8"),
+                token, chat_id, body.encode("utf-8"),
                 filename=f"maestro_{from_agent}_{msg_type}.txt"
             )
-            if short_result.get("ok") or file_result.get("ok"):
-                return web.json_response({"ok": True})
-            return web.json_response({"ok": False, "reason": short_result.get("error") or file_result.get("error")}, status=502)
+            return (short_result.get("ok") or file_result.get("ok")), "ok"
 
-    return web.json_response({"ok": False, "reason": f"Platform {platform} not supported yet"}, status=501)
+    # Visibility state loader
+    VISIBILITY_PATH = HERMES_HOME / "maestro_visibility.json"
+
+    def _get_display_mode(agent_id: str) -> str:
+        """Return 'long' (default), 'short', or 'off' for an agent."""
+        if not VISIBILITY_PATH.exists():
+            return "long"
+        try:
+            data = json.loads(VISIBILITY_PATH.read_text())
+            if isinstance(data, dict) and agent_id in data:
+                return data[agent_id].get("display_mode", "long")
+        except Exception:
+            pass
+        return "long"
+
+    results = []
+
+    # Primary notification — always sent to the agent who owns this transport
+    to_agent = data.get("to", "")
+    if msg_type == "maestro_out":
+        primary_header = f"📤 {from_agent} → {to_agent or from_agent}:\n\n"
+    else:
+        primary_header = f"📥 {from_agent} → {agent_id}:\n\n"
+    primary_ok, primary_detail = await _send_notification(agent_id, primary_header, content, subject=subject, msg_type=msg_type, direction="out" if msg_type == "maestro_out" else "in")
+    results.append({"agent": agent_id, "ok": primary_ok, "detail": primary_detail})
+
+    # Secondary notification — mirror to counterparty so both sides see indicators
+    # For inbound messages (direct, etc.): also send to the sender so they see delivery
+    # For outbound mirrors (maestro_out): also send to the recipient so they see receipt
+    counterparty = None
+    if msg_type == "maestro_out" and to_agent and to_agent != agent_id:
+        counterparty = to_agent
+    elif msg_type != "maestro_out" and from_agent != "unknown" and from_agent != agent_id:
+        counterparty = from_agent
+
+    if counterparty:
+        if msg_type == "maestro_out":
+            mirror_header = f"📨 {agent_id} → {counterparty}:\n\n"
+        else:
+            mirror_header = f"📨 {from_agent} → {agent_id}:\n\n"
+        mirror_ok, mirror_detail = await _send_notification(counterparty, mirror_header, content, subject=subject, msg_type=msg_type, direction="in")
+        results.append({"agent": counterparty, "ok": mirror_ok, "detail": mirror_detail})
+
+    if any(r["ok"] for r in results):
+        return web.json_response({"ok": True, "notifications": results})
+    return web.json_response({"ok": False, "reason": results[0]["detail"]}, status=502)
 
 
 async def _health_handler(request: web.Request) -> web.Response:

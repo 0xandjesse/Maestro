@@ -649,7 +649,7 @@ class MaestroTransport:
             return web.json_response({"accepted": False, "reason": "Invalid message format"}, status=400)
 
         msg_id = message.get("id") or ""
-        sender = message.get("sender",{}).get("agentId","?")
+        sender = message.get("sender",{}).get("agentId","unknown")
         msg_type = message.get("type")
 
         # Prevent duplicate/broadcast loop
@@ -806,7 +806,7 @@ class MaestroTransport:
             await self._route_system_reply(message, f"Error reading blackboard: {type(e).__name__}: {e}")
 
     async def _process_bb_search(self, message):
-        sender_id = message.get("sender", {}).get("agentId", "?")
+        sender_id = message.get("sender", {}).get("agentId", "unknown")
         board_id = message.get("boardId", "default")
         prefix = message.get("prefix")
         query = message.get("query")
@@ -822,7 +822,7 @@ class MaestroTransport:
             await self._route_system_reply(message, f"BB_SEARCH ERROR: {type(e).__name__}: {e}")
 
     async def _process_bb_delete(self, message):
-        sender_id = message.get("sender", {}).get("agentId", "?")
+        sender_id = message.get("sender", {}).get("agentId", "unknown")
         board_id = message.get("boardId", "default")
         key = message.get("key")
         prefix = message.get("prefix")
@@ -840,7 +840,7 @@ class MaestroTransport:
             await self._route_system_reply(message, f"BB_DELETE ERROR: {type(e).__name__}: {e}")
 
     async def _process_bb_recall(self, message):
-        sender_id = message.get("sender", {}).get("agentId", "?")
+        sender_id = message.get("sender", {}).get("agentId", "unknown")
         target = message.get("targetAgent")
         query_type = message.get("queryType", "snapshot")
         query = message.get("query")
@@ -896,7 +896,7 @@ class MaestroTransport:
         Directives are high-priority instructions from officers.
         They go through the full LLM loop, not just ACK.
         """
-        sender = message.get("sender", {}).get("agentId", "?")
+        sender = message.get("sender", {}).get("agentId", "unknown")
         content = message.get("content", "")
         log.info(f"Processing directive from {sender}: {content[:200]}")
         # Route through full LLM loop — same as _process_message
@@ -1015,7 +1015,7 @@ class MaestroTransport:
             raw_content = str(raw_content)
         entry = {
             "id": message.get("id"),
-            "sender": message.get("sender", {}).get("agentId", "?"),
+            "sender": message.get("sender", {}).get("agentId", "unknown"),
             "type": message.get("type", "direct"),
             "content": raw_content[:2000],
             "timestamp": int(time.time() * 1000),
@@ -1186,7 +1186,7 @@ class MaestroTransport:
             except Exception:
                 pass
         bridge_url = self.config.get("gatewayBridgeUrl", "http://127.0.0.1:8644/maestro/notify")
-        sender = message.get("sender", {}).get("agentId", "?")
+        sender = message.get("sender", {}).get("agentId", "unknown")
         try:
             content = message.get("content", "")
             # Telegram message limit is 4096 chars. Use full content up to that,

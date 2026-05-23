@@ -17,11 +17,20 @@ from tools.registry import registry
 
 
 def _agent_id_from_env() -> str:
-    """Derive the agent ID from HERMES_HOME so calls without explicit agent_id still work."""
-    home = os.getenv("HERMES_HOME", "")
+    """Derive the agent ID from the environment so calls without explicit agent_id still work."""
+    # Strategy A: HERMES_PROFILE or HERMES_PROFILE_NAME env var
+    for env_key in ("HERMES_PROFILE", "HERMES_PROFILE_NAME"):
+        candidate = os.environ.get(env_key)
+        if candidate and candidate != "unknown":
+            return candidate
+    # Strategy B: Derive from HERMES_HOME path
+    home = os.environ.get("HERMES_HOME", "")
     if home:
-        return Path(home).name
-    return "unknown"
+        name = Path(home).name
+        if name and name != "unknown":
+            return name
+    # Fallback: never return "unknown" — that produces untraceable memory entries
+    return "anonymous"
 
 # Ensure maestro-transport is importable
 sys.path.insert(0, str(Path.home() / "maestro-transport"))

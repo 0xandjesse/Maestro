@@ -15,7 +15,7 @@ import sys
 import requests
 
 # Import checklist_manager from the maestro-transport directory
-MT_DIR = "/home/andjesse/maestro-transport"
+MT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if MT_DIR not in sys.path:
     sys.path.insert(0, MT_DIR)
 
