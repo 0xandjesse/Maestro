@@ -105,6 +105,24 @@ async def _send_telegram_document(token: str, chat_id: str, document_bytes: byte
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
+def _strip_maestro_wrapper(body: str) -> str:
+    """Remove agent-generated Maestro Protocol wrappers from the body.
+
+    Agents tend to prefix their output with:
+      [Maestro Protocol — Outbound to ...]
+      [Maestro Protocol — Inbound ...]
+      etc.
+
+    This strips those lines so the bridge only delivers the actual content.
+    """
+    lines = body.split("\n")
+    if lines and re.match(r'^\[Maestro Protocol', lines[0].strip()):
+        lines = lines[1:]
+        while lines and not lines[0].strip():
+            lines = lines[1:]
+    return "\n".join(lines).strip()
+
+
 async def _notify_handler(request: web.Request) -> web.Response:
     try:
         data = await request.json()
@@ -114,110 +132,106 @@ async def _notify_handler(request: web.Request) -> web.Response:
     agent_id = data.get("agent_id")
     from_agent = data.get("from", "unknown")
     content = data.get("content", "")
-    summary = data.get("summary", content[:200])
     msg_type = data.get("msg_type", "direct")
     subject = data.get("subject", "")
 
     if not agent_id or not content:
         return web.json_response({"ok": False, "reason": "Missing agent_id or content"}, status=400)
 
+    # Strip agent-generated wrappers from the body
+    content = _strip_maestro_wrapper(content)
+
     platform = data.get("platform", "telegram")
     if platform != "telegram":
         return web.json_response({"ok": False, "reason": f"Platform {platform} not supported yet"}, status=501)
 
-    async def _send_notification(to_agent_id, header, body, subject="", msg_type="direct", direction="in"):
-        """Deliver notification to one agent's Telegram chat. Returns (ok, detail).
-        
-        direction: "in" for incoming messages (📥), "out" for outgoing (📤).
-        """
-        display_mode = _get_display_mode(to_agent_id)
-        if display_mode == "off":
-            return True, "suppressed"
-        tcfg = _load_telegram_config(to_agent_id)
-        if not tcfg or not tcfg.get("token") or not tcfg.get("chat_id"):
-            return False, f"No Telegram config for {to_agent_id}"
-        chat_id = tcfg["chat_id"]
-        token = tcfg["token"]
-        emoji = "📨" if direction == "out" else "📥"
-        if display_mode == "short":
-            # Compact header + subject only, italicized
-            subj = (subject or body[:80])
-            subj = subj.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            sender_label = from_agent if direction == "out" else from_agent
-            recip_label = to_agent if direction == "out" else to_agent_id
-            short_text = f"{emoji} {sender_label} → {recip_label}:\n\n<i>{subj}</i>"
-            if len(short_text) <= 4096:
-                result = await _send_telegram(token, chat_id, short_text, parse_mode="HTML")
-                if result.get("ok"):
-                    return True, result.get("message_id")
-                return False, result.get("error", "Unknown")
-            else:
-                short = short_text[:200] + "...\n\n[Full message attached]"
-                short_result = await _send_telegram(token, chat_id, short, parse_mode="HTML")
-                file_result = await _send_telegram_document(
-                    token, chat_id, body.encode("utf-8"),
-                    filename=f"maestro_{from_agent}_{msg_type}.txt"
-                )
-                return (short_result.get("ok") or file_result.get("ok")), "ok"
-        # Long mode (default): header + italicized body
-        safe_header = header.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        safe_body = body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        formatted = f"{safe_header}<i>{safe_body}</i>"
-        if len(formatted) <= 4096:
-            result = await _send_telegram(token, chat_id, formatted, parse_mode="HTML")
-            if result.get("ok"):
-                return True, result.get("message_id")
-            return False, result.get("error", "Unknown")
-        else:
-            short = f"{safe_header}<i>{safe_body[:200]}...</i>\n\n[Full message attached]"
-            short_result = await _send_telegram(token, chat_id, short, parse_mode="HTML")
-            file_result = await _send_telegram_document(
-                token, chat_id, body.encode("utf-8"),
-                filename=f"maestro_{from_agent}_{msg_type}.txt"
-            )
-            return (short_result.get("ok") or file_result.get("ok")), "ok"
-
-    # Visibility state loader
+    # Visibility state
     VISIBILITY_PATH = HERMES_HOME / "maestro_visibility.json"
 
-    def _get_display_mode(agent_id: str) -> str:
-        """Return 'long' (default), 'short', or 'off' for an agent."""
+    def _get_display_mode(agent: str) -> str:
         if not VISIBILITY_PATH.exists():
             return "long"
         try:
-            data = json.loads(VISIBILITY_PATH.read_text())
-            if isinstance(data, dict) and agent_id in data:
-                return data[agent_id].get("display_mode", "long")
+            v = json.loads(VISIBILITY_PATH.read_text())
+            if isinstance(v, dict) and agent in v:
+                return v[agent].get("display_mode", "long")
         except Exception:
             pass
         return "long"
 
+    async def _deliver(to_agent: str, emoji: str, header: str, body: str) -> tuple:
+        """Deliver a formatted notification to one agent. Returns (ok, detail)."""
+        mode = _get_display_mode(to_agent)
+        if mode == "off":
+            return True, "suppressed"
+
+        tcfg = _load_telegram_config(to_agent)
+        if not tcfg or not tcfg.get("token") or not tcfg.get("chat_id"):
+            return False, f"No Telegram config for {to_agent}"
+        chat_id = tcfg["chat_id"]
+        token = tcfg["token"]
+
+        # HTML-safe
+        safe_header = header.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+        if mode == "short":
+            raw_subj = (subject or body[:80])
+            if raw_subj.lower().startswith("subject:"):
+                raw_subj = raw_subj[8:].strip()
+            subj = raw_subj.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            text = f"{emoji} {safe_header}\n\n<i>{subj}</i>"
+        else:
+            clean_body = body
+            if clean_body.lower().startswith("subject:"):
+                nl = clean_body.find("\n")
+                if nl >= 0:
+                    clean_body = clean_body[nl+1:].strip()
+                else:
+                    clean_body = ""
+            safe_body = clean_body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            text = f"{emoji} {safe_header}\n\n<i>{safe_body}</i>"
+
+        if len(text) <= 4096:
+            result = await _send_telegram(token, chat_id, text, parse_mode="HTML")
+            if result.get("ok"):
+                return True, result.get("message_id")
+            return False, result.get("error", "Unknown")
+
+        short_text = f"{emoji} {safe_header}<i>{body[:200]}...</i>\n\n[Full message attached]"
+        short_result = await _send_telegram(token, chat_id, short_text, parse_mode="HTML")
+        file_result = await _send_telegram_document(
+            token, chat_id, body.encode("utf-8"),
+            filename=f"maestro_{from_agent}_{msg_type}.txt"
+        )
+        return (short_result.get("ok") or file_result.get("ok")), "ok"
+
     results = []
-
-    # Primary notification — always sent to the agent who owns this transport
     to_agent = data.get("to", "")
-    if msg_type == "maestro_out":
-        primary_header = f"📤 {from_agent} → {to_agent or from_agent}:\n\n"
-    else:
-        primary_header = f"📥 {from_agent} → {agent_id}:\n\n"
-    primary_ok, primary_detail = await _send_notification(agent_id, primary_header, content, subject=subject, msg_type=msg_type, direction="out" if msg_type == "maestro_out" else "in")
-    results.append({"agent": agent_id, "ok": primary_ok, "detail": primary_detail})
 
-    # Secondary notification — mirror to counterparty so both sides see indicators
-    # For inbound messages (direct, etc.): also send to the sender so they see delivery
-    # For outbound mirrors (maestro_out): also send to the recipient so they see receipt
+    is_outbound = (msg_type == "maestro_out")
     counterparty = None
-    if msg_type == "maestro_out" and to_agent and to_agent != agent_id:
+    if is_outbound and to_agent and to_agent != agent_id:
         counterparty = to_agent
-    elif msg_type != "maestro_out" and from_agent != "unknown" and from_agent != agent_id:
+    elif not is_outbound and from_agent != "unknown" and from_agent != agent_id:
         counterparty = from_agent
 
+    if is_outbound:
+        primary_emoji = "📨"
+        primary_header = f"Maestro direct to {to_agent or from_agent}:"
+    else:
+        primary_emoji = "📥"
+        primary_header = f"Maestro direct from {from_agent}:"
+    primary_ok, primary_detail = await _deliver(agent_id, primary_emoji, primary_header, content)
+    results.append({"agent": agent_id, "ok": primary_ok, "detail": primary_detail})
+
     if counterparty:
-        if msg_type == "maestro_out":
-            mirror_header = f"📨 {agent_id} → {counterparty}:\n\n"
+        if is_outbound:
+            mirror_emoji = "📥"
+            mirror_header = f"Maestro direct from {from_agent}:"
         else:
-            mirror_header = f"📨 {from_agent} → {agent_id}:\n\n"
-        mirror_ok, mirror_detail = await _send_notification(counterparty, mirror_header, content, subject=subject, msg_type=msg_type, direction="in")
+            mirror_emoji = "📨"
+            mirror_header = f"Maestro direct to {agent_id}:"
+        mirror_ok, mirror_detail = await _deliver(counterparty, mirror_emoji, mirror_header, content)
         results.append({"agent": counterparty, "ok": mirror_ok, "detail": mirror_detail})
 
     if any(r["ok"] for r in results):
