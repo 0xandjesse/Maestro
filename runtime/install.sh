@@ -4,6 +4,11 @@ set -e
 # Maestro Transport Installer
 # Prerequisites: Hermes agent installed at ~/.hermes/hermes-agent/
 # This applies overlay patches so Maestro works with Hermes
+#
+# ⚠ This installer overlays patches against a fresh Hermes checkout.
+# If patches fail with "patch may already be applied or rejected", re-clone:
+#   cd ~/.hermes && mv hermes-agent hermes-agent.old
+#   git clone https://github.com/NousResearch/hermes-agent.git --depth 1
 
 MAESTRO_DIR="$(cd "$(dirname "$0")" && pwd)"
 H_HOME="${HERMES_HOME:-$HOME/.hermes/hermes-agent}"
@@ -43,7 +48,7 @@ if [ -z "$SITE_PKGS" ]; then
 fi
 echo "✓ Python site-packages: $SITE_PKGS"
 
-# Function: apply patch if target exists
+# Function: apply patch with new-file support
 apply_patch() {
     local patch_file="$1"
     local target="$2"
@@ -52,8 +57,10 @@ apply_patch() {
         return
     fi
     if [ ! -f "$target" ]; then
-        echo "   ⚠ target file not found for patch: $target"
-        return
+        # NEW FILE: create empty target, then patch will populate it
+        echo "   ⚠ target does not exist — creating: $target"
+        mkdir -p "$(dirname "$target")"
+        touch "$target"
     fi
     # Test if patch would apply cleanly
     if patch --dry-run -p0 -i "$patch_file" "$target" > /dev/null 2>&1; then
@@ -113,6 +120,7 @@ fi
 echo ""
 echo "[4/4] Installing Maestro dependencies..."
 $PYTHON -m pip install aiohttp fastapi uvicorn websockets python-dateutil 2>&1 | tail -3
+$PYTHON -c "import dateutil; print('dateutil OK')" || echo "⚠ dateutil import FAILED"
 
 # ── 5. Create convenience symlinks ──────────────────
 echo ""
