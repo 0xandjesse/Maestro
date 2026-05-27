@@ -3,8 +3,8 @@
 import hashlib
 from pathlib import Path
 
-CANONICAL = Path("/home/andjesse/maestro-transport")
-STORM = Path("/home/andjesse/maestro-transport/maestro_transports/stormtrooper")
+CANONICAL = Path("/home/andjesse/maestro-sdk/runtime")
+STORM = Path("/home/andjesse/maestro-sdk/runtime/maestro_transports/stormtrooper")
 
 FILES_TO_SYNC = [
     "hermes_memory.py",

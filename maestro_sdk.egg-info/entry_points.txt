@@ -1,0 +1,2 @@
+[console_scripts]
+maestro-server = maestro_sdk.cli:main

@@ -117,4 +117,4 @@ Each agent runs a transport that speaks to the bridge. The bridge speaks to the 
 
 ## License
 
-Proprietary — NGI0 Zero Commons framework.
+MIT — see LICENSE file.

@@ -686,6 +686,13 @@ class MaestroTransport:
     DEDUP_WINDOW = 300       # seconds (5 minutes)
     DEDUP_MAX_ENTRIES = 1000 # prune when exceeded
 
+    # Master Vault singleton for bridge URL lookups
+    _vault_instance = None  # None=untried, otherwise MasterVault or sentinel
+
+    def _get_bridge_url(self) -> str:
+        """Get gateway bridge URL from config."""
+        return self.config.get("gatewayBridgeUrl", "http://127.0.0.1:8644/maestro/notify")
+
     def __init__(self, config):
         from collections import defaultdict, deque
         self.config = config
@@ -1150,7 +1157,7 @@ class MaestroTransport:
     async def _notify_loop_detected(self, sender_id: str, reason: str, content_preview: str):
         """Surface a loop detection warning to Jesse via the gateway bridge. Best-effort — never raises."""
         try:
-            bridge_url = self.config.get("gatewayBridgeUrl", "http://127.0.0.1:8644/maestro/notify")
+            bridge_url = self._get_bridge_url()
             payload = {
                 "agent_id": self.agent_id,
                 "from": self.agent_id,
@@ -1258,32 +1265,28 @@ class MaestroTransport:
             # Subject enforcement — every outbound Maestro reply MUST carry a Subject
             outbound_subject = extract_subject(output)
             if outbound_subject is None:
-                log.warning(f"[SUBJECT] Agent {self.agent_id} failed to include Subject: line — bouncing error")
-                sender_id = message["sender"]["agentId"]
-                sender_reg = self.registry.lookup(sender_id)
-                if sender_reg:
-                    error_reply = {
-                        "id": str(uuid.uuid4()),
-                        "type": "error",
-                        "content": f"Subject: Message rejected — missing Subject line\n\nAgent {self.agent_id} did not include a Subject: line in its response. All Maestro messages require a Subject line. Please re-send with a Subject: prefix.",
-                        "subject": "Message rejected — missing Subject line",
-                        "sender": {"agentId": self.agent_id},
-                        "recipient": sender_id,
-                        "inReplyTo": message.get("id"),
-                        "timestamp": int(time.time() * 1000),
-                        "version": self.config["version"],
-                    }
-                    endpoint = sender_reg["webhookEndpoint"]
-                    asyncio.create_task(self._deliver(endpoint, error_reply))
+                log.warning(f"[SUBJECT] Agent {self.agent_id} failed to include Subject: line — injecting error into agent context")
+                # Instead of sending an error P2N to the wrong recipient (original sender),
+                # deliver it back to THIS agent so it learns in-context.
+                # The error is delivered as a self-directed system message that Hermes will see.
+                error_msg = {
+                    "id": str(uuid.uuid4()),
+                    "type": "system",
+                    "content": f"❌ Subject Enforcement: Your response to {message['sender']['agentId']} was rejected because it lacks a Subject: line. All Maestro messages MUST start with 'Subject: <summary>' on the first line. Please re-generate your response with a Subject line.",
+                    "subject": "Subject Enforcement — missing Subject line",
+                    "sender": {"agentId": "system"},
+                    "recipient": self.agent_id,
+                    "inReplyTo": message.get("id"),
+                    "timestamp": int(time.time() * 1000),
+                    "version": self.config["version"],
+                }
+                # Deliver directly to our own Hermes — agent sees this in its conversation
+                asyncio.create_task(self.hermes.send_and_complete(error_msg))
                 return
 
-            # Directives are fire-and-forget: the agent delivers results directly
-            # (via send_message to TG, checklist_complete_item, etc.).
-            # Do NOT bounce the LLM response back through Maestro — it creates
-            # noisy surface notifications on the sender's side.
+            # ACKs for directives now surface — loop guards handle noise
             if message.get("type") == "directive":
-                log.info(f"Directive complete — suppressing Maestro reply (agent delivers directly)")
-                return
+                log.info(f"Directive complete — routing ACK (loop guards active)")
             # Zero Trust outbound signing
             provenance = None
             if self._zerotrust_enabled and self._private_key and output and CRYPTO_AVAILABLE and _crypto:
@@ -1305,7 +1308,7 @@ class MaestroTransport:
                     vis = json.loads(visibility_path.read_text())
                     profile = self.agent_id
                     if isinstance(vis, dict) and profile in vis and vis[profile].get("out", False):
-                        bridge_url = self.config.get("gatewayBridgeUrl", "http://127.0.0.1:8644/maestro/notify")
+                        bridge_url = self._get_bridge_url()
                         sender_id = message.get("sender", {}).get("agentId", "unknown")
                         mirror_payload = {
                             "agent_id": profile,
@@ -1583,12 +1586,12 @@ class MaestroTransport:
                 vis = json.loads(visibility_path.read_text())
                 profile = self.agent_id
                 if isinstance(vis, dict) and profile in vis:
-                    if vis[profile].get("in", False) is False:
+                    if vis[profile].get("in", True) is False:
                         log.debug(f"Gateway surface suppressed — maestro_in is OFF for {profile}")
                         return
         except Exception:
             pass
-        bridge_url = self.config.get("gatewayBridgeUrl", "http://127.0.0.1:8644/maestro/notify")
+        bridge_url = self._get_bridge_url()
         sender = message.get("sender", {}).get("agentId", "unknown")
         try:
             content = message.get("content", "")

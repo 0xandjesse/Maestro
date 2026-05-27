@@ -1,8 +1,6 @@
-diff --git a/gateway/run.py b/gateway/run.py
-index 5e8fce8e1..dfbf2e76f 100644
 --- a/gateway/run.py
 +++ b/gateway/run.py
-@@ -379,6 +379,9 @@ from hermes_constants import get_hermes_home
+@@ -669,6 +669,9 @@
  from utils import atomic_json_write, atomic_yaml_write, base_url_host_matches, is_truthy_value
  _hermes_home = get_hermes_home()
  
@@ -12,7 +10,7 @@ index 5e8fce8e1..dfbf2e76f 100644
  # Load environment variables from ~/.hermes/.env first.
  # User-managed env files should override stale shell exports on restart.
  from dotenv import load_dotenv  # backward-compat for tests that monkeypatch this symbol
-@@ -1481,6 +1484,42 @@ class GatewayRunner:
+@@ -1848,6 +1851,42 @@
  
      _VOICE_MODE_PATH = _hermes_home / "gateway_voice_mode.json"
  
@@ -55,7 +53,7 @@ index 5e8fce8e1..dfbf2e76f 100644
      def _voice_key(self, platform: Platform, chat_id: str) -> str:
          """Return a platform-namespaced key for voice mode state."""
          return f"{platform.value}:{chat_id}"
-@@ -2514,6 +2553,7 @@ class GatewayRunner:
+@@ -2936,6 +2975,7 @@
  
          # --- Draining case (gateway restarting/stopping) ---
          if self._draining:
@@ -63,7 +61,7 @@ index 5e8fce8e1..dfbf2e76f 100644
              adapter = self.adapters.get(event.source.platform)
              if not adapter:
                  return True
-@@ -6187,6 +6227,9 @@ class GatewayRunner:
+@@ -7010,6 +7050,9 @@
              # /fast and /reasoning are config-only and take effect next
              # message, so they fall through to the catch-all busy response
              # below — users should wait and set them between turns.
@@ -73,7 +71,7 @@ index 5e8fce8e1..dfbf2e76f 100644
              if _cmd_def_inner and _cmd_def_inner.name in {"yolo", "verbose"}:
                  if _cmd_def_inner.name == "yolo":
                      return await self._handle_yolo_command(event)
-@@ -6195,6 +6238,13 @@ class GatewayRunner:
+@@ -7018,6 +7061,13 @@
                  if _cmd_def_inner.name == "footer":
                      return await self._handle_footer_command(event)
  
@@ -87,7 +85,7 @@ index 5e8fce8e1..dfbf2e76f 100644
              # Gateway-handled info/control commands with dedicated
              # running-agent handlers.
              if _cmd_def_inner and _cmd_def_inner.name in _DEDICATED_HANDLERS:
-@@ -6275,6 +6325,7 @@ class GatewayRunner:
+@@ -7098,6 +7148,7 @@
                      )
                  return None
              if self._draining:
@@ -95,7 +93,7 @@ index 5e8fce8e1..dfbf2e76f 100644
                  if self._queue_during_drain_enabled():
                      self._queue_or_replace_pending_event(_quick_key, event)
                  return (
-@@ -6563,10 +6614,41 @@ class GatewayRunner:
+@@ -7392,10 +7443,41 @@
          if canonical == "subgoal":
              return await self._handle_subgoal_command(event)
  
@@ -137,7 +135,7 @@ index 5e8fce8e1..dfbf2e76f 100644
              return f"⏳ Gateway is {self._status_action_gerund()} and is not accepting new work right now."
  
          # User-defined quick commands (bypass agent loop, no LLM call)
-@@ -9541,6 +9623,205 @@ class GatewayRunner:
+@@ -10573,6 +10655,205 @@
  
          return t("gateway.goal.set", budget=state.max_turns, goal=state.goal)
  
@@ -343,7 +341,7 @@ index 5e8fce8e1..dfbf2e76f 100644
      async def _handle_subgoal_command(self, event: "MessageEvent") -> str:
          """Handle /subgoal for gateway platforms (mirror of CLI handler).
  
-@@ -15728,6 +16009,7 @@ class GatewayRunner:
+@@ -17063,6 +17344,7 @@
                  return
              self._running_agents[session_key] = agent_holder[0]
              if self._draining:
@@ -351,7 +349,7 @@ index 5e8fce8e1..dfbf2e76f 100644
                  self._update_runtime_status("draining")
          
          tracking_task = asyncio.create_task(track_agent())
-@@ -16268,6 +16550,7 @@ class GatewayRunner:
+@@ -17620,6 +17902,7 @@
                      session_key, run_generation=run_generation
                  )
              if self._draining:
@@ -359,207 +357,10 @@ index 5e8fce8e1..dfbf2e76f 100644
                  self._update_runtime_status("draining")
              
              # Wait for cancelled tasks
-@@ -16359,6 +16642,203 @@ class GatewayRunner:
-         return response
+@@ -18266,4 +18549,4 @@
  
  
-+    # ------------------------------------------------------------------
-+    # Agent Memory System slash commands
-+    # ------------------------------------------------------------------
-+
-+    async def _handle_bb_command(self, event) -> str:
-+        """Handle /bb [agent] -- one agent BB, last 4h."""
-+        args = event.get_command_args().strip().split()
-+        agent_id = args[0] if args else None
-+        if not agent_id:
-+            return "Usage: /bb <agent>  (e.g. /bb proteus)"
-+        import json, pathlib
-+        p = _MAESTRO_HOME / "blackboards" / f"{agent_id}_bb.json"
-+        if not p.exists():
-+            return f"No blackboard found for {agent_id}."
-+        try:
-+            data = json.loads(p.read_text())
-+            if not isinstance(data, list):
-+                return f"Blackboard for {agent_id} is not in array format."
-+        except Exception as e:
-+            return f"Error reading BB for {agent_id}: {e}"
-+        lines = [f"{agent_id} -- last 4h activity", "-" * 30]
-+        for e in data[:20]:
-+            ts = e.get("ts", "?")[11:16] if len(e.get("ts", "")) > 15 else e.get("ts", "?")
-+            desc = e.get("description", "?")
-+            status = e.get("status", "?")
-+            dur = e.get("duration_min")
-+            dur_txt = f", {dur}min" if dur is not None else ""
-+            lines.append(f"{ts}  {desc}  [{status}{dur_txt}]")
-+        return "\n".join(lines)
-+
-+    async def _handle_bball_command(self, event) -> str:
-+        """Handle /bball -- all agents BBs combined."""
-+        import json, pathlib
-+        bb_root = _MAESTRO_HOME / "blackboards"
-+        if not bb_root.exists():
-+            return "No blackboards directory found."
-+        all_entries = []
-+        for p in sorted(bb_root.glob("*_bb.json")):
-+            agent_id = p.stem.replace("_bb", "")
-+            try:
-+                data = json.loads(p.read_text())
-+                if isinstance(data, list):
-+                    for e in data:
-+                        e["_agent"] = agent_id
-+                    all_entries.extend(data)
-+            except Exception:
-+                continue
-+        if not all_entries:
-+            return "No BB entries found for any agent."
-+        all_entries.sort(key=lambda x: x.get("ts", ""), reverse=True)
-+        lines = ["All agents -- last 4h activity", "-" * 40]
-+        for e in all_entries[:30]:
-+            ts = e.get("ts", "?")[11:16] if len(e.get("ts", "")) > 15 else e.get("ts", "?")
-+            agent = e.get("_agent", "?")
-+            desc = e.get("description", "?")
-+            status = e.get("status", "?")
-+            dur = e.get("duration_min")
-+            dur_txt = f", {dur}min" if dur is not None else ""
-+            lines.append(f"{ts}  [{agent}]  {desc}  [{status}{dur_txt}]")
-+        return "\n".join(lines)
-+
-+    async def _handle_log_command(self, event) -> str:
-+        """Handle /log [agent] -- last 100 work log entries."""
-+        args = event.get_command_args().strip().split()
-+        agent_id = args[0] if args else None
-+        if not agent_id:
-+            return "Usage: /log <agent>  (e.g. /log proteus)"
-+        import json, pathlib
-+        p = _MAESTRO_HOME / "logs" / f"{agent_id}.jsonl"
-+        if not p.exists():
-+            return f"No work log found for {agent_id}."
-+        lines = [f"{agent_id} -- last 100 work log entries", "-" * 40]
-+        try:
-+            with open(p) as f:
-+                entries = [json.loads(line) for line in f if line.strip()]
-+        except Exception as e:
-+            return f"Error reading log for {agent_id}: {e}"
-+        for e in entries[-100:]:
-+            ts = e.get("ts", "?")[11:16] if len(e.get("ts", "")) > 15 else e.get("ts", "?")
-+            action = e.get("action", "?")
-+            params = e.get("params", {})
-+            desc = params.get("description", "?") if isinstance(params, dict) else "?"
-+            lines.append(f"{ts}  {action}: {desc}")
-+        return "\n".join(lines)
-+
-+    async def _handle_memory_command(self, event) -> str:
-+        """Handle /memory [agent] -- Task Memory summary."""
-+        args = event.get_command_args().strip().split()
-+        agent_id = args[0] if args else None
-+        if not agent_id:
-+            return "Usage: /memory <agent>  (e.g. /memory proteus)"
-+        import json, pathlib
-+        p = _MAESTRO_HOME / "memory" / f"{agent_id}_task_memory.json"
-+        if not p.exists():
-+            return f"No memory file yet for {agent_id} -- they may not have run a summarization cron yet."
-+        try:
-+            data = json.loads(p.read_text())
-+        except Exception as e:
-+            return f"Error reading memory for {agent_id}: {e}"
-+        gen = data.get("generated_at", "?")
-+        ts = gen[11:16] if isinstance(gen, str) and len(gen) > 15 else gen
-+        summary = data.get("summary", "No summary available.")
-+        stale = data.get("stale", False)
-+        lines = [
-+            f"{agent_id} -- Task Memory (generated {ts}){' [STALE]' if stale else ''}",
-+            "-" * 40,
-+            summary,
-+            "",
-+            "Completed: " + ", ".join(data.get("completed_items", []) or ["nothing"]),
-+            "In progress: " + ", ".join(data.get("in_progress_items", []) or ["nothing"]),
-+            "Blocked: " + ", ".join(data.get("blocked_items", []) or ["nothing"]),
-+        ]
-+        return "\n".join(lines)
-+
-+    async def _handle_memoryall_command(self, event) -> str:
-+        """Handle /memoryall -- all agents Task Memory summaries."""
-+        import json, pathlib
-+        mem_root = _MAESTRO_HOME / "memory"
-+        if not mem_root.exists():
-+            return "No memory directory found."
-+        files = sorted(mem_root.glob("*_task_memory.json"))
-+        if not files:
-+            return "No Task Memory files found for any agent."
-+        blocks = ["All agents -- Task Memory summaries", "-" * 40]
-+        for p in files:
-+            agent_id = p.stem.replace("_task_memory", "")
-+            try:
-+                data = json.loads(p.read_text())
-+            except Exception:
-+                continue
-+            gen = data.get("generated_at", "?")
-+            ts = gen[11:16] if isinstance(gen, str) and len(gen) > 15 else gen
-+            summary = data.get("summary", "No summary.")
-+            stale = data.get("stale", False)
-+            blocks.append(f"\n{agent_id} (generated {ts}){' [STALE]' if stale else ''}")
-+            blocks.append("-" * 20)
-+            blocks.append(summary)
-+        return "\n".join(blocks)
-+
-+    async def _handle_cl_command(self, event) -> str:
-+        """Handle /cl [agent] -- list active Checklists for an agent."""
-+        import json, pathlib
-+        CL_ROOT = _MAESTRO_HOME / "checklists"
-+        args = event.get_command_args().strip().split()
-+        agent_id = args[0] if args else None
-+        if not agent_id:
-+            return "Usage: /cl <agent_id>  (e.g. /cl proteus)"
-+        cls = []
-+        for p in CL_ROOT.glob("*.json"):
-+            try:
-+                cl = json.loads(p.read_text())
-+                if cl.get("created_by") == agent_id or cl.get("assigned_to") == agent_id:
-+                    if cl.get("status") == "active":
-+                        items = cl.get("items", [])
-+                        done = sum(1 for i in items if i.get("status") == "done")
-+                        total = len(items)
-+                        role = "created by" if cl.get("created_by") == agent_id else "assigned to"
-+                        cls.append(
-+                            f"{cl['id']}  {role} {agent_id}    {done}/{total} done  \"{cl.get('title', 'Untitled')}\""
-+                        )
-+            except Exception:
-+                continue
-+        if not cls:
-+            return f"No active checklists for {agent_id}."
-+        return f"{agent_id} -- active checklists\n{'-' * 27}\n" + "\n".join(cls)
-+
-+    async def _handle_clshow_command(self, event) -> str:
-+        """Handle /clshow <id> -- show full Checklist with item statuses."""
-+        import json, pathlib
-+        CL_ROOT = _MAESTRO_HOME / "checklists"
-+        args = event.get_command_args().strip().split()
-+        if not args:
-+            return "Usage: /clshow <checklist_id>  (e.g. /clshow CL-proteus-a3f9c12b)"
-+        checklist_id = args[0]
-+        p = CL_ROOT / f"{checklist_id}.json"
-+        if not p.exists():
-+            return f"Checklist {checklist_id} not found."
-+        try:
-+            cl = json.loads(p.read_text())
-+            title = cl.get("title", "Untitled")
-+            status = cl.get("status", "unknown")
-+            created_by = cl.get("created_by", "?")
-+            assigned_to = cl.get("assigned_to", "?")
-+            lines = [
-+                f"{cl['id']} -- {title}",
-+                f"Created by: {created_by}  |  Assigned to: {assigned_to}  |  Status: {status}",
-+                "-" * 66,
-+            ]
-+            for item in cl.get("items", []):
-+                s = item.get("status", "pending")
-+                label = f"[{s}]".ljust(14)
-+                lines.append(f"{label}{item['id']}   {item.get('description', '')}")
-+            return "\n".join(lines)
-+        except Exception as ex:
-+            return f"Error reading checklist {checklist_id}: {ex}"
-+
-+
- def _start_cron_ticker(stop_event: threading.Event, adapters=None, loop=None, interval: int = 60):
-     """
-     Background thread that ticks the cron scheduler at a regular interval.
+ if __name__ == "__main__":
+-    main()
++    main()
+\ No newline at end of file

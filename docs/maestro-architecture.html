@@ -50,7 +50,7 @@
     </div>
 
     <div class="diagram-container">
-      <svg viewBox="0 0 1100 720">
+      <svg viewBox="0 0 1100 740">
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
             <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
@@ -69,7 +69,7 @@
         <rect width="100%" height="100%" fill="url(#grid)"/>
 
         <!-- Venue Boundary -->
-        <rect x="30" y="50" width="1040" height="590" rx="12" fill="rgba(251, 191, 36, 0.04)" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4"/>
+        <rect x="30" y="50" width="1040" height="610" rx="12" fill="rgba(251, 191, 36, 0.04)" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4"/>
         <text x="42" y="68" fill="#fbbf24" font-size="10" font-weight="600">Venue — TaskMaster</text>
 
         <!-- External / Other Venues -->
@@ -101,11 +101,24 @@
         <text x="160" y="588" fill="#94a3b8" font-size="9" text-anchor="middle">Ed25519 signing + verification</text>
         <text x="160" y="606" fill="#94a3b8" font-size="9" text-anchor="middle">Full cryptographic custody chain</text>
 
-        <!-- Identity Resolver -->
-        <rect x="820" y="100" width="220" height="80" rx="6" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1.5"/>
-        <text x="930" y="130" fill="white" font-size="11" font-weight="600" text-anchor="middle">Identity Resolver</text>
-        <text x="930" y="148" fill="#94a3b8" font-size="9" text-anchor="middle">HttpKeyResolver (self-hostable)</text>
-        <text x="930" y="166" fill="#94a3b8" font-size="9" text-anchor="middle">did:key / did:web resolution</text>
+        <!-- Identity Resolver (Planned) -->
+        <rect x="820" y="90" width="220" height="65" rx="6" fill="rgba(120, 53, 15, 0.15)" stroke="#fbbf24" stroke-width="1" stroke-dasharray="4,3"/>
+        <text x="930" y="115" fill="#fbbf24" font-size="9" font-weight="600" text-anchor="middle">Identity Resolver (planned)</text>
+        <text x="930" y="133" fill="#64748b" font-size="8" text-anchor="middle">HttpKeyResolver / did:key / did:web</text>
+        <text x="930" y="147" fill="#64748b" font-size="8" text-anchor="middle">Cross-org verification — future milestone</text>
+
+        <!-- Delegation Tokens (Roadmap Milestone 1) -->
+        <rect x="820" y="190" width="220" height="110" rx="6" fill="rgba(16, 185, 129, 0.1)" stroke="#10b981" stroke-width="1.5" stroke-dasharray="6,2"/>
+        <text x="930" y="215" fill="#10b981" font-size="10" font-weight="600" text-anchor="middle">Delegation Tokens</text>
+        <text x="930" y="233" fill="#6ee7b7" font-size="8" text-anchor="middle">Signed capability objects</text>
+        <text x="930" y="249" fill="#94a3b8" font-size="8" text-anchor="middle">Scoped • Depth-limited • P2P verifiable</text>
+        <text x="930" y="267" fill="#94a3b8" font-size="8" text-anchor="middle">Prevents authority laundering</text>
+        <text x="930" y="285" fill="#94a3b8" font-size="8" text-anchor="middle">Confused deputy protection</text>
+        <text x="930" y="298" fill="#64748b" font-size="7" text-anchor="middle">Milestone 1 — closes 27 audit findings</text>
+
+        <!-- Delegation Tokens ↔ Checklist -->
+        <line x1="930" y1="300" x2="930" y2="418" stroke="#10b981" stroke-width="1" marker-end="url(#arrowhead)" stroke-dasharray="4,3"/>
+        <text x="942" y="365" fill="#10b981" font-size="7">delegation flow</text>
 
         <!-- Gateway -->
         <rect x="320" y="220" width="450" height="250" rx="8" fill="rgba(8, 51, 68, 0.3)" stroke="#22d3ee" stroke-width="1.5"/>
@@ -163,6 +176,9 @@
         <text x="395" y="126" fill="white" font-size="11" font-weight="600" text-anchor="middle">Human Operator</text>
         <text x="395" y="144" fill="#94a3b8" font-size="9" text-anchor="middle">Telegram / Discord / CLI</text>
 
+        <!-- Tele bridge annotation -->
+        <text x="330" y="200" fill="#64748b" font-size="7">via Maestro Bridge</text>
+
         <!-- ARROWS -->
 
         <!-- External → Transport -->
@@ -191,7 +207,7 @@
         <text x="450" y="180" fill="#fbbf24" font-size="8">resolve identity</text>
 
         <!-- Identity Resolver → External -->
-        <line x1="930" y1="100" x2="930" y2="60" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <line x1="930" y1="90" x2="930" y2="60" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <text x="942" y="72" fill="#94a3b8" font-size="8">did:key/web</text>
 
         <!-- Human → Gateway -->
@@ -224,6 +240,8 @@
         <text x="842" y="702" fill="#94a3b8" font-size="8">Venue Boundary</text>
         <line x1="920" y1="700" x2="936" y2="700" stroke="#fb7185" stroke-width="1" stroke-dasharray="3,3"/>
         <text x="942" y="702" fill="#94a3b8" font-size="8">Provenance Flow</text>
+        <rect x="820" y="710" width="16" height="10" rx="2" fill="rgba(16, 185, 129, 0.1)" stroke="#10b981" stroke-width="1" stroke-dasharray="3,3"/>
+        <text x="842" y="718" fill="#94a3b8" font-size="8">Delegation (Roadmap)</text>
       </svg>
     </div>
 
@@ -270,7 +288,7 @@
     </div>
 
     <p class="footer">
-      Maestro Protocol • v0.2.0 • MIT License • Production-deployed in Sovereign Swarm (6-agent mesh)
+      Maestro Protocol • v0.2.0 • MIT License • Production-deployed in Sovereign Swarm (9-agent mesh)
     </p>
   </div>
 </body>

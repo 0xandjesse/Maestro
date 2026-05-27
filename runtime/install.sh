@@ -48,7 +48,7 @@ if [ -z "$SITE_PKGS" ]; then
 fi
 echo "✓ Python site-packages: $SITE_PKGS"
 
-# Function: apply patch with new-file support
+# ── apply_patch: auto-detects git a/b (-p1) vs old-style (-p0) ────
 apply_patch() {
     local patch_file="$1"
     local target="$2"
@@ -57,24 +57,27 @@ apply_patch() {
         return
     fi
     if [ ! -f "$target" ]; then
-        # NEW FILE: create empty target, then patch will populate it
         echo "   ⚠ target does not exist — creating: $target"
         mkdir -p "$(dirname "$target")"
         touch "$target"
     fi
-    # Test if patch would apply cleanly
-    if patch --dry-run -p0 -i "$patch_file" "$target" > /dev/null 2>&1; then
-        patch -p0 -i "$patch_file" "$target"
-        echo "   ✓ applied patch to $target"
+    # Detect patch format
+    local strip_opt="-p0"
+    if grep -q "^--- a/" "$patch_file" 2>/dev/null || grep -q "^+++ b/" "$patch_file" 2>/dev/null; then
+        strip_opt="-p1"
+    fi
+    if patch --dry-run $strip_opt -i "$patch_file" > /dev/null 2>&1; then
+        patch $strip_opt -i "$patch_file"
+        echo "   ✓ applied patch to $target ($strip_opt)"
     else
-        echo "   ⚠ patch for $target may already be applied or rejected"
+        echo "   ⚠ patch for $target may already be applied or rejected ($strip_opt)"
     fi
 }
 
-# ── 1. Copy Maestro tools into Hermes tools/ ────
+# ── 1. Copy Maestro tools into Hermes ────
 echo ""
 echo "[1/4] Copying Maestro tools into Hermes..."
-for f in send_message_tool.py maestro_memory.py bb_tool.py checklist_tool.py; do
+for f in send_message_tool.py maestro_memory.py bb_tool.py checklist_tool.py memory_tool.py; do
     src="$MAESTRO_DIR/tools/$f"
     dst="$H_HOME/tools/$f"
     if [ -f "$src" ]; then
@@ -90,11 +93,9 @@ echo ""
 echo "[2/4] Installing maestro package (editable)..."
 if [ -d "$MAESTRO_DIR/maestro" ] && [ -f "$MAESTRO_DIR/maestro/__init__.py" ]; then
     PYVER="$($PYTHON -c 'import sys; print("python%d.%d" % sys.version_info[:2])')"
-    # Simple copy install — no setup.py needed
     MAESTRO_DST="$SITE_PKGS/maestro-editable"
     mkdir -p "$MAESTRO_DST"
     cp "$MAESTRO_DIR"/maestro/*.py "$MAESTRO_DST/" 2>/dev/null
-    # Create symlink back for import
     ln -sf "$MAESTRO_DST" "$SITE_PKGS/maestro" 2>/dev/null || true
     echo "   ✓ maestro package installed at $MAESTRO_DST"
 else
@@ -105,12 +106,11 @@ fi
 echo ""
 echo "[3/4] Applying Hermes overlay patches..."
 if [ -d "$MAESTRO_DIR/patches" ]; then
-    apply_patch "$MAESTRO_DIR/patches/gateway_run.py.patch"        "$H_HOME/gateway/run.py"
-    apply_patch "$MAESTRO_DIR/patches/platforms_telegram.py.patch" "$H_HOME/gateway/platforms/telegram.py"
+    apply_patch "$MAESTRO_DIR/patches/gateway_run.py.patch"         "$H_HOME/gateway/run.py"
+    apply_patch "$MAESTRO_DIR/patches/platforms_telegram.py.patch"  "$H_HOME/gateway/platforms/telegram.py"
     apply_patch "$MAESTRO_DIR/patches/hermes_cli_commands.py.patch" "$H_HOME/hermes_cli/commands.py"
     apply_patch "$MAESTRO_DIR/patches/hermes_cli_gateway.py.patch" "$H_HOME/hermes_cli/gateway.py"
     apply_patch "$MAESTRO_DIR/patches/agent_audit_log.py.patch"    "$H_HOME/agent/audit_log.py"
-    apply_patch "$MAESTRO_DIR/patches/tools_memory_tool.py.patch"  "$H_HOME/tools/memory_tool.py"
     apply_patch "$MAESTRO_DIR/patches/toolsets.py.patch"           "$H_HOME/toolsets.py"
 else
     echo "   ⚠ patches/ directory not found"
@@ -127,7 +127,6 @@ echo ""
 echo "[Symlinks] Creating handy shortcuts..."
 mkdir -p ~/.local/bin 2>/dev/null || true
 
-# maestro-bridge helper
 if [ -f "$MAESTRO_DIR/maestro_gateway_bridge.py" ]; then
     cat > ~/.local/bin/maestro-bridge <<EOF
 #!/usr/bin/env bash
@@ -138,7 +137,6 @@ EOF
     echo "   ✓ ~/.local/bin/maestro-bridge"
 fi
 
-# maestro-visibility helper (toggle long/short/off)
 cat > ~/.local/bin/maestro-visibility <<'EOF'
 #!/usr/bin/env bash
 # maestro-visibility — toggle Maestro notification mode
@@ -149,14 +147,12 @@ mkdir -p "$(dirname $VIS_FILE)"
 if python3 -c "import json; open('$VIS_FILE','w').write(json.dumps({'$PROFILE':{'display_mode':'$MODE','in':True,'out':True}},indent=2))" 2>/dev/null; then
     echo "Maestro visibility set to: $MODE (profile: $PROFILE)"
 else
-    echo '{"'"$PROFILE"'":{"display_mode":"'"$MODE"'","in":true,"out":true}}' > "$VIS_FILE"
-    echo "Maestro visibility set to: $MODE (profile: $PROFILE)"
+    echo "⚠ Failed to write visibility config"
 fi
 EOF
 chmod +x ~/.local/bin/maestro-visibility
 echo "   ✓ ~/.local/bin/maestro-visibility"
 
-# ── Summary ──────────────────────────────────────────
 echo ""
 echo "═══════════════════════════════════════════════════════"
 echo "  Maestro installation complete"
@@ -169,7 +165,6 @@ echo "  maestro-visibility short  # set your profile to short mode"
 echo "  maestro-visibility off    # disable Maestro notifications"
 echo ""
 echo "To start everything:"
-echo "  cd $H_HOME && source $(basename $VENV)/bin/activate"
+echo "  cd $H_HOME && source venv/bin/activate"
 echo "  maestro-bridge --port 8644 &"
 echo "  python -m hermes_cli.main --profile proteus gateway run"
-echo ""
