@@ -44,6 +44,9 @@ REGISTRY_PATH = Path("/home/andjesse/.maestro/registry.json")
 _vault_instance = None
 _vault_warned = False  # one-time deprecation warning
 
+# ── Subject dedup ──
+_last_subject_by_sender: dict[str, str] = {}
+
 
 def _get_vault():
     """Lazy-load the Master Vault singleton."""
@@ -248,6 +251,15 @@ async def _notify_sender_error(sender_id: str, error_text: str, intended_recipie
             pass
 
 
+def _should_suppress(sender_id: str, subject: str) -> bool:
+    """Suppress if this sender's last delivered message had the same subject."""
+    last = _last_subject_by_sender.get(sender_id)
+    if last == subject:
+        return True
+    _last_subject_by_sender[sender_id] = subject
+    return False
+
+
 async def _notify_handler(request: web.Request) -> web.Response:
     try:
         data = await request.json()
@@ -282,6 +294,15 @@ async def _notify_handler(request: web.Request) -> web.Response:
 
     # Strip agent-generated wrappers from the body
     content = _strip_maestro_wrapper(content)
+
+    # ── Subject dedup ──
+    # Fallback: if no Subject line, use first ~80 chars of body
+    dedup_subject = subject.strip() if subject else content[:80].strip()
+    if _should_suppress(from_agent, dedup_subject):
+        logging.getLogger(__name__).info(
+            "Bridge dedup: dropping message from %s (reason: same_subject)", from_agent
+        )
+        return web.json_response({"ok": False, "reason": "same_subject"}, status=200)
 
     platform = data.get("platform", "telegram")
     if platform != "telegram":
@@ -363,10 +384,10 @@ async def _notify_handler(request: web.Request) -> web.Response:
 
     if is_outbound:
         primary_emoji = "📨"
-        primary_header = f"To {to_agent or counterparty}: {subject}"
+        primary_header = f"To {counterparty or to_agent or 'unknown'}: {subject}"
     else:
         primary_emoji = "📥"
-        primary_header = f"From {from_agent}: {subject}"
+        primary_header = f"From {counterparty or from_agent}: {subject}"
     primary_ok, primary_detail = await _deliver(agent_id, primary_emoji, primary_header, content)
     results.append({"agent": agent_id, "ok": primary_ok, "detail": primary_detail})
 
@@ -377,7 +398,15 @@ async def _notify_handler(request: web.Request) -> web.Response:
     if counterparty:
         cp_cfg = _load_telegram_config(counterparty)
         cp_chat_id = cp_cfg.get("chat_id") if cp_cfg else None
-        if cp_chat_id and cp_chat_id != primary_chat_id:
+        # Deliver mirror if: different chat, OR same chat but different bot token
+        # (same chat_id with different bots = separate message histories)
+        same_bot = (
+            cp_chat_id == primary_chat_id
+            and cp_cfg
+            and primary_cfg
+            and cp_cfg.get("token") == primary_cfg.get("token")
+        )
+        if cp_chat_id and not same_bot:
             if is_outbound:
                 mirror_emoji = "📥"
                 mirror_header = f"From {from_agent}: {subject}"

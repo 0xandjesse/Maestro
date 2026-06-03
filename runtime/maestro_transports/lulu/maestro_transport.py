@@ -1079,8 +1079,12 @@ class MaestroTransport:
                 except Exception:
                     logs = []
             logs.append(entry)
-            # Keep last 200 entries per agent
-            logs = logs[-200:]
+            # Keep last 50 entries per agent (hygiene target is 50)
+            logs = logs[-50:]
+            # Time-based pruning: remove entries older than 24 hours
+            MAX_AGE_HOURS = 24
+            cutoff_ms = int((time.time() - MAX_AGE_HOURS * 3600) * 1000)
+            logs = [e for e in logs if e.get("timestamp", 0) > cutoff_ms]
             log_path.write_text(json.dumps(logs, indent=2, ensure_ascii=False))
         except Exception as e:
             log.warning(f"Work log write failed: {type(e).__name__}: {e}")

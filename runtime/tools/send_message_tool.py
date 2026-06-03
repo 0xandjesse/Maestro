@@ -307,7 +307,11 @@ SEND_MESSAGE_SCHEMA = {
             },
             "message": {
                 "type": "string",
-                "description": "The message text to send. To send an image or file, include MEDIA:<local_path> (e.g. 'MEDIA:/tmp/hermes/cache/img_xxx.jpg') in the message — the platform will deliver it as a native media attachment."
+                        "description": "The message text to send. To send an image or file, include MEDIA:<local_path> (e.g. 'MEDIA:/tmp/hermes/cache/img_xxx.jpg') in the message — the platform will deliver it as a native media attachment. For Maestro agent-to-agent messages (target='maestro:agent_id'), the first line MUST be 'Subject: <brief summary>' followed by a blank line, then the body."
+            },
+            "subject": {
+                "type": "string",
+                "description": "REQUIRED when target starts with 'maestro:'. A short subject line for the message. Maestro messages without a subject are REJECTED at the protocol level. Example: 'Skill audit complete' or 'Grant proposal draft ready for review'."
             }
         },
         "required": []
@@ -352,6 +356,12 @@ def _handle_send(args):
     # This is the foundational inter-agent comms path.
     if platform_name == "maestro":
         subject = args.get("subject", "")
+        # Fallback: extract Subject line from message body if not passed explicitly
+        if not subject or not subject.strip():
+            import re
+            m = re.search(r'^Subject:\s*(.+?)(?:\n|$)', message, re.IGNORECASE | re.MULTILINE)
+            if m:
+                subject = m.group(1).strip()
         return json.dumps(_send_via_maestro_bridge(target_ref, message, subject=subject))
 
     if target_ref:

@@ -1225,17 +1225,17 @@ class MaestroTransport:
                 if reply_to in self._answered_ids:
                     log.info(f"[LOOP] Suppressing reply to already-answered message {reply_to} from {sender_id}")
                     return
-                # If this is a reply to a reply (third+ hop), and content is short ack-like, suppress
-                # If this is a reply to a reply (third+ hop), check for ack patterns in the first sentence
-                # "Acknowledged, Proteus. Current operational posture: idle..." — starts with ack
+                # If this is a reply to a reply (third+ hop), and content is SHORT and ack-like, suppress.
+                # Only suppress short ack-only messages (<100 chars) — longer replies starting with
+                # ack greetings are legitimate directive responses, not loop echos.
                 ack_starts = ("standing by", "copy", "acknowledged", "ready", "on deck", "ack",
                              "received", "got it", "roger", "will do", "understood", "noted",
-                             "loop closed", "closing the loop", "no further action")
+                             "loop closed", "closing the loop", "no further action",
+                             "copy that", "mesh green", "mesh at full green")
                 lower = content.lower().rstrip('.')
-                # Check first 80 chars — catches ack greetings even in longer messages
                 first_words = lower[:80]
-                if any(first_words.startswith(w) for w in ack_starts):
-                    log.info(f"[LOOP] Suppressing ack-of-ack from {sender_id} (reply_to={reply_to}, starts_with={content[:40].strip()})")
+                if len(content.strip()) < 100 and any(first_words.startswith(w) for w in ack_starts):
+                    log.info(f"[LOOP] Suppressing ack-of-ack from {sender_id} (reply_to={reply_to}, len={len(content)}, starts_with={content[:40].strip()})")
                     return
 
             # 4. Subject echo suppression — if we recently sent subject X to this agent,
@@ -1265,24 +1265,29 @@ class MaestroTransport:
             # Subject enforcement — every outbound Maestro reply MUST carry a Subject
             outbound_subject = extract_subject(output)
             if outbound_subject is None:
-                log.warning(f"[SUBJECT] Agent {self.agent_id} failed to include Subject: line — injecting error into agent context")
-                # Instead of sending an error P2N to the wrong recipient (original sender),
-                # deliver it back to THIS agent so it learns in-context.
-                # The error is delivered as a self-directed system message that Hermes will see.
+                log.warning(f"[SUBJECT] Agent {self.agent_id} failed to include Subject: line — auto-injecting")
+                # Auto-generate a Subject from the first sentence (max 80 chars)
+                first_line = output.split("\n")[0].strip()
+                if len(first_line) > 80:
+                    first_line = first_line[:77] + "..."
+                if first_line:
+                    outbound_subject = first_line
+                else:
+                    outbound_subject = f"Response from {self.agent_id}"
+                # Also deliver a self-directed error so the agent learns in-context
                 error_msg = {
                     "id": str(uuid.uuid4()),
                     "type": "system",
-                    "content": f"❌ Subject Enforcement: Your response to {message['sender']['agentId']} was rejected because it lacks a Subject: line. All Maestro messages MUST start with 'Subject: <summary>' on the first line. Please re-generate your response with a Subject line.",
-                    "subject": "Subject Enforcement — missing Subject line",
+                    "content": f"❌ Subject Enforcement: Your response to {message['sender']['agentId']} was auto-corrected because it lacked a Subject: line. All Maestro messages MUST start with 'Subject: <summary>' on the first line. Your reply was still delivered, but future replies without Subject lines will also be auto-corrected.",
+                    "subject": "Subject Enforcement — missing Subject line (auto-corrected)",
                     "sender": {"agentId": "system"},
                     "recipient": self.agent_id,
                     "inReplyTo": message.get("id"),
                     "timestamp": int(time.time() * 1000),
                     "version": self.config["version"],
                 }
-                # Deliver directly to our own Hermes — agent sees this in its conversation
                 asyncio.create_task(self.hermes.send_and_complete(error_msg))
-                return
+                # DO NOT RETURN — continue routing with the auto-generated Subject
 
             # ACKs for directives now surface — loop guards handle noise
             if message.get("type") == "directive":
@@ -1425,8 +1430,12 @@ class MaestroTransport:
                 except Exception:
                     logs = []
             logs.append(entry)
-            # Keep last 200 entries per agent
-            logs = logs[-200:]
+            # Keep last 50 entries per agent (hygiene target is 50)
+            logs = logs[-50:]
+            # Time-based pruning: remove entries older than 24 hours
+            MAX_AGE_HOURS = 24
+            cutoff_ms = int((time.time() - MAX_AGE_HOURS * 3600) * 1000)
+            logs = [e for e in logs if e.get("timestamp", 0) > cutoff_ms]
             log_path.write_text(json.dumps(logs, indent=2, ensure_ascii=False))
         except Exception as e:
             log.warning(f"Work log write failed: {type(e).__name__}: {e}")

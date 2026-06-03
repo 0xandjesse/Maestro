@@ -144,6 +144,17 @@ The audit didn't just find bugs — it produced a prioritized hardening roadmap.
 
 ---
 
+## Generative AI Usage
+
+This repository uses generative AI (DeepSeek V4 Pro, via Hermes agent runtime) for drafting assistance during proposal development and documentation. All AI-generated content is reviewed, edited, and validated by the human project team. The AI serves as a drafting accelerator; all substantive decisions, architectural design, and final language reflect human intellectual contribution.
+
+**Model:** DeepSeek V4 Pro (local inference via Ollama)
+**Tool:** Hermes agent runtime with Lexicon (COO agent profile)
+**Dates of AI-assisted drafting:** 2026-05-25 to 2026-05-27
+**Compliance:** Full disclosure per [NLnet's Generative AI Policy (effective December 8, 2025)](https://nlnet.nl/foundation/policies/generativeAI/).
+
+---
+
 ## License
 
 MIT
