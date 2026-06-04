@@ -35,6 +35,13 @@ except Exception:
     CRYPTO_AVAILABLE = False
     _crypto = None
 
+try:
+    from maestro.tokens import validate_token as _validate_token
+    TOKENS_AVAILABLE = True
+except Exception:
+    TOKENS_AVAILABLE = False
+    _validate_token = None
+
 # Optional: Google Calendar API for native trigger engine
 CALENDAR_AVAILABLE = False
 try:
@@ -141,11 +148,19 @@ class LocalRegistry:
                     data = json.loads(raw) if raw.strip() else []
                 except Exception:
                     data = []
+                # Preserve existing publicKey if no new one is provided
+                existing_pk = None
                 data = [e for e in data if e.get("agentId") != agent_id]
+                # But remember the old entry's publicKey if we're about to overwrite without one
+                old_entries = [e for e in (json.loads(raw) if raw.strip() else []) if e.get("agentId") == agent_id]
+                if old_entries:
+                    existing_pk = old_entries[0].get("publicKey")
+                # Use provided key, fall back to existing, fall back to None
+                final_pk = public_key or existing_pk
                 entry = {"agentId": agent_id, "webhookEndpoint": webhook_endpoint,
                     "capabilities": capabilities or [], "registeredAt": int(time.time()*1000), "lastSeen": int(time.time()*1000)}
-                if public_key:
-                    entry["publicKey"] = public_key
+                if final_pk:
+                    entry["publicKey"] = final_pk
                 data.append(entry)
                 payload = json.dumps(data, indent=2)
                 os.ftruncate(fd, 0)
@@ -167,6 +182,15 @@ class LocalRegistry:
                 if e.get("agentId") == agent_id:
                     return e.get("publicKey")
             return None
+
+
+def _safe_sender_id(message, default="unknown"):
+    """Extract sender agentId from message, guarded against bare-string sender."""
+    raw_sender = message.get("sender", default)
+    if isinstance(raw_sender, dict):
+        return raw_sender.get("agentId", default)
+    return str(raw_sender) if raw_sender else default
+
 
 class HermesClient:
     def __init__(self, api_url, api_key, conversation, agent_id=None):
@@ -199,7 +223,7 @@ class HermesClient:
         lines = [
             f"[Identity Lock: You are {target}. Respond ONLY as {target}. Do NOT adopt or mirror the identity of any other officer.]",
             f"[Maestro Protocol — Inbound to {target}]",
-            f"From: {message.get('sender',{}).get('agentId','unknown')}",
+            f"From: {_safe_sender_id(message,'unknown')}",
             f"Type: {msg_type}",
         ]
         if message.get("stageId"):
@@ -218,12 +242,21 @@ class HermesClient:
                 "If a checklist_id was provided in this directive, call checklist_complete_item when done.",
             ])
         return "\n".join(lines)
+    # Retry constants
+    _MAX_RETRIES = 3
+    _RETRY_BASE_DELAY = 2  # seconds (2s → 4s → 8s)
+    _DEAD_LETTER_ROOT = Path(os.path.expanduser("~/.maestro/dead_letter"))
+
     async def send_and_complete(self, message):
         """Forward Maestro message to the local gateway /v1/chat/completions endpoint.
 
         The gateway runs the full agent tool loop and returns the final
         response.  This keeps the transport thin and the gateway as the
         single execution surface.
+
+        Retry: 3 attempts with exponential backoff (2s/4s/8s).
+        Dead letter: on total failure, writes to ~/.maestro/dead_letter/{agent_id}.jsonl
+        so the message can be requeued by a watchdog cron.
 
         Timeout is 1500s (25 min) — generous enough for long multi-tool
         tasks (write + upload, multi-step research, etc.) while still
@@ -236,21 +269,49 @@ class HermesClient:
 
         # Use /v1/chat/completions (the gateway's stable API endpoint)
         prompt = self._format_prompt(message, agent_id=self.agent_id)
-        async with ClientSession() as session:
-            async with session.post(
-                f"{self.api_url}/v1/chat/completions",
-                json={"model": "hermes-agent", "messages": [{"role": "user", "content": prompt}], "stream": False},
-                headers=self._headers, timeout=ClientTimeout(total=1500)
-            ) as resp:
-                if resp.status != 200:
-                    log.error(f"Chat completions failed {resp.status}: {await resp.text()}")
-                    return None
-                data = await resp.json()
-                output = data.get("choices", [{}])[0].get("message", {}).get("content")
-                if output:
-                    log.info(f"Response: {output[:80]}...")
-                    _log_message(self.agent_id, "receive", params=message, result=output, session_id=session_id)
-                return output
+        last_error = None
+
+        for attempt in range(1, self._MAX_RETRIES + 1):
+            try:
+                async with ClientSession() as session:
+                    async with session.post(
+                        f"{self.api_url}/v1/chat/completions",
+                        json={"model": "hermes-agent", "messages": [{"role": "user", "content": prompt}], "stream": False},
+                        headers=self._headers, timeout=ClientTimeout(total=1500)
+                    ) as resp:
+                        if resp.status != 200:
+                            last_error = f"HTTP {resp.status}: {await resp.text()}"
+                            log.warning(f"send_and_complete attempt {attempt}/{self._MAX_RETRIES}: {last_error[:120]}")
+                        else:
+                            data = await resp.json()
+                            output = data.get("choices", [{}])[0].get("message", {}).get("content")
+                            if output:
+                                log.info(f"Response: {output[:80]}...")
+                                _log_message(self.agent_id, "receive", params=message, result=output, session_id=session_id)
+                            return output
+            except Exception as e:
+                last_error = f"{type(e).__name__}: {e}"
+                log.warning(f"send_and_complete attempt {attempt}/{self._MAX_RETRIES}: {last_error[:120]}")
+
+            if attempt < self._MAX_RETRIES:
+                delay = self._RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                log.info(f"Retrying in {delay}s...")
+                await asyncio.sleep(delay)
+
+        # All retries exhausted — write to dead letter queue
+        self._DEAD_LETTER_ROOT.mkdir(parents=True, exist_ok=True)
+        dl_path = self._DEAD_LETTER_ROOT / f"{self.agent_id}.jsonl"
+        dl_entry = {
+            "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "agent_id": self.agent_id,
+            "message": message,
+            "last_error": str(last_error)[:500],
+            "retries_exhausted": True,
+        }
+        with open(dl_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(dl_entry, ensure_ascii=False) + "\n")
+        log.error(f"DEAD LETTER: message {session_id} queued at {dl_path} after {self._MAX_RETRIES} failed attempts")
+        return None
     async def health_check(self):
         try:
             async with ClientSession() as s:
@@ -713,6 +774,10 @@ class MaestroTransport:
         # Loop prevention state
         self._last_content: dict = {}  # sender_id -> (content_hash, timestamp)
         self._sender_message_times: dict = defaultdict(deque)  # sender_id -> deque of timestamps
+        # Enforcement circuit breaker — prevent enforcement-on-enforcement chains
+        self._enforcement_injections: dict = defaultdict(deque)  # sender_id -> deque of timestamps
+        self._ENFORCEMENT_MAX = 3      # max enforcement injections per sender
+        self._ENFORCEMENT_WINDOW = 60  # seconds
         self.app = web.Application()
         self.app.router.add_get("/health", self.handle_health)
         self.app.router.add_post("/message", self.handle_message)
@@ -743,30 +808,45 @@ class MaestroTransport:
         self._private_key = None
         self._public_key = None
         self._load_or_generate_keys()
+        # DM permission enforcement (Layer 2 — opt-in transport gate)
+        dm_policy = config.get("dm_policy", {})
+        self._dm_policy_enabled = bool(dm_policy.get("enabled", False))
+        self._dm_token_dir = Path(
+            os.path.expanduser(dm_policy.get("token_dir", "~/.maestro/dm_tokens"))
+        )
+        self._dm_issuer_pubkey = dm_policy.get("lexicon_public_key", "")
+        self._dm_venue = dm_policy.get("venue", "org.dm")
 
     def _load_or_generate_keys(self):
-        """Load MAESTRO_PRIVATE_KEY/PUBLIC_KEY from agent .env or generate and append."""
-        env_path = Path(os.environ.get("HERMES_HOME", "/home/andjesse/.hermes")) / ".env"
-        pk = os.environ.get("MAESTRO_PRIVATE_KEY")
-        pub = os.environ.get("MAESTRO_PUBLIC_KEY")
-        if pk and pub:
-            self._private_key = pk
-            self._public_key = pub
-            log.info("[ZT] Keys loaded from environment")
-            return
-        # Try reading from .env if env vars not set
+        """Load MAESTRO_PRIVATE_KEY/PUBLIC_KEY from agent .env FIRST, then fall back to os.environ."""
+        # Derive profile path from HERMES_HOME with agent-specific fallback
+        profile_dir = Path(os.environ.get(
+            "HERMES_HOME", str(Path.home() / ".hermes" / "profiles" / self.agent_id)
+        ))
+        env_path = profile_dir / ".env"
+
+        # Load from AGENT'S .env FIRST (authoritative source)
+        pk = None
+        pub = None
         if env_path.exists():
             for line in env_path.read_text().splitlines():
                 if line.startswith("MAESTRO_PRIVATE_KEY="):
                     pk = line.split("=", 1)[1].strip().strip('"\'')
                 elif line.startswith("MAESTRO_PUBLIC_KEY="):
                     pub = line.split("=", 1)[1].strip().strip('"\'')
+
+        # Fall back to environment (for explicit overrides)
+        if not pk:
+            pk = os.environ.get("MAESTRO_PRIVATE_KEY")
+        if not pub:
+            pub = os.environ.get("MAESTRO_PUBLIC_KEY")
+
         if pk and pub:
             self._private_key = pk
             self._public_key = pub
             os.environ["MAESTRO_PRIVATE_KEY"] = pk
             os.environ["MAESTRO_PUBLIC_KEY"] = pub
-            log.info("[ZT] Keys loaded from .env")
+            log.info("[ZT] Keys loaded")
             return
         # Generate new pair
         if CRYPTO_AVAILABLE and _crypto:
@@ -791,6 +871,51 @@ class MaestroTransport:
             "uptime": int(time.time()*1000) - self.started_at if self.started_at else 0,
             "seen_keys": len(self.seen._seen)})
 
+    def _check_dm_policy(self, sender_id: str, recipient_id: str) -> Tuple[bool, str]:
+        """Check DM permission for sender→recipient at transport layer (Layer 2).
+
+        Per SPEC_DM_PERMISSION_ENFORCEMENT.md §3.4:
+          1. Load token file for sender from dm_token_dir
+          2. Validate cryptographically via validate_token()
+          3. Verify issuer matches configured lexicon_public_key
+          4. Verify venue discriminator (from config)
+          5. Check recipient is in sender's tgt list
+
+        Returns:
+            (True, "") — permitted
+            (False, "<reason>") — denied
+        """
+        token_path = self._dm_token_dir / f"{sender_id}.json"
+        if not token_path.exists():
+            return False, "no_dm_token"
+
+        try:
+            token = json.loads(token_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return False, "token_unreadable"
+
+        # Cryptographic validation
+        if TOKENS_AVAILABLE and _validate_token:
+            valid, reason = _validate_token(token)
+            if not valid:
+                return False, f"token_invalid:{reason}"
+
+        # Issuer trust check
+        if token.get("issuer_public_key", "") != self._dm_issuer_pubkey:
+            return False, "untrusted_issuer"
+
+        # Venue discriminator
+        payload = token.get("payload", {})
+        if payload.get("ven") != self._dm_venue:
+            return False, "wrong_venue"
+
+        # Target membership
+        tgt = payload.get("tgt", [])
+        if recipient_id not in tgt:
+            return False, f"not_allowed:{recipient_id}"
+
+        return True, ""
+
     async def handle_message(self, req):
         try: message = await req.json()
         except: return web.json_response({"accepted": False, "reason": "Invalid JSON"}, status=400)
@@ -798,7 +923,12 @@ class MaestroTransport:
             return web.json_response({"accepted": False, "reason": "Invalid message format"}, status=400)
 
         msg_id = message.get("id") or ""
-        sender = message.get("sender",{}).get("agentId","unknown")
+        raw_sender = message.get("sender", "unknown")
+        if isinstance(raw_sender, dict):
+            sender = raw_sender.get("agentId", "unknown")
+        else:
+            # Bare-string sender format (e.g. "lexicon") — accept directly
+            sender = str(raw_sender) if raw_sender else "unknown"
         msg_type = message.get("type")
 
         # Prevent duplicate/broadcast loop
@@ -830,13 +960,30 @@ class MaestroTransport:
 
         recipient = message.get("recipient")
 
+        # -- DM permission gating (Layer 2 — opt-in via dm_policy config) --
+        if self._dm_policy_enabled and msg_type in ("direct", "directive"):
+            # System messages and infrastructure types always bypass
+            if sender != "system":
+                ok, reason = self._check_dm_policy(sender, recipient)
+                if not ok:
+                    log.warning(f"DM denied: {sender} → {recipient} ({reason})")
+                    return web.json_response(
+                        {"accepted": False, "reason": f"dm_denied:{reason}"},
+                        status=403,
+                    )
+
         # -- Structural message types: handled without LLM --
-        # directive: acknowledge receipt, no LLM processing
+        # directive: acknowledge receipt, no LLM processing at handle_message level.
+        # Spawn background task for LLM processing, then send exactly ONE ACK back
+        # to the sender so it surfaces in Telegram — no reply-chain risk because
+        # the ACK has no Subject: line gap and the loop guards catch any follow-up.
         if msg_type == "directive":
             log.info(f"Directive from {sender}: processing structurally")
             task = asyncio.create_task(self._handle_directive(message))
             MaestroTransport._background_tasks.add(task)
             task.add_done_callback(MaestroTransport._background_tasks.discard)
+            # Send a single structured ACK back to the sender
+            asyncio.create_task(self._ack_directive(message))
             return web.json_response({"accepted": True, "type": "directive", "agentId": self.agent_id})
 
         # system: acknowledge, no LLM processing
@@ -1088,6 +1235,54 @@ class MaestroTransport:
             except Exception as e:
                 log.error(f"System reply failed to {sender_id} at {endpoint}: {type(e).__name__}: {e}")
 
+    async def _ack_directive(self, message):
+        """Send exactly ONE structured ACK back to the directive sender.
+
+        The ACK is a Maestro `direct` message with a proper Subject line,
+        routed back through the sender's transport. It surfaces in Telegram
+        via the bridge so the human officer sees delivery confirmation.
+
+        This is a structural ACK — it signals receipt, not completion.
+        The agent may later send a second message with actual results.
+        The loop guards (dedup, rate limiter, ack-of-ack suppression) prevent
+        any reply-chain from forming if the sender acknowledges the ACK.
+        """
+        sender_id = message.get("sender", {}).get("agentId")
+        if not sender_id:
+            return
+        sender_reg = self.registry.lookup(sender_id)
+        if not sender_reg:
+            return
+        msg_id = message.get("id", "unknown")
+        content = message.get("content", "")
+        # Extract a short preview for the ACK subject
+        subject_line = content.split("\n")[0] if content else ""
+        if len(subject_line) > 60:
+            subject_line = subject_line[:57] + "..."
+        ack = {
+            "id": str(uuid.uuid4()),
+            "type": "system",  # system type — surfaces via bridge, NO LLM processing on recipient
+            "content": f"Subject: ACK — directive received\n\n"
+                       f"Directive {msg_id} received by {self.agent_id}. Processing started.\n"
+                       f"Summary: {subject_line}",
+            "subject": f"ACK — directive received: {subject_line[:50]}" if subject_line else "ACK — directive received",
+            "sender": {"agentId": self.agent_id},
+            "recipient": sender_id,
+            "inReplyTo": msg_id,
+            "timestamp": int(time.time() * 1000),
+            "version": self.config.get("version", "3.2"),
+        }
+        endpoint = sender_reg["webhookEndpoint"]
+        self.logger.log(self.agent_id, "directive_ack", {
+            "sender": sender_id, "msg_id": ack["id"], "in_reply_to": msg_id
+        }, session_id=msg_id)
+        async with ClientSession() as s:
+            try:
+                async with s.post(endpoint, json=ack, timeout=ClientTimeout(total=10)) as resp:
+                    log.info(f"Directive ACK to {sender_id}: {resp.status}")
+            except Exception as e:
+                log.error(f"Directive ACK failed to {sender_id}: {type(e).__name__}: {e}")
+
     async def _handle_directive(self, message):
         """Process a directive: fire-and-forget into the LLM loop.
 
@@ -1102,7 +1297,11 @@ class MaestroTransport:
         synchronous response, and long-running tasks (write + upload,
         multi-step research, etc.) work without any timeout concern.
         """
-        sender = message.get("sender", {}).get("agentId", "unknown")
+        sender = message.get("sender")
+        if isinstance(sender, dict):
+            sender = sender.get("agentId", "unknown")
+        else:
+            sender = str(sender) if sender else "unknown"
         content = message.get("content", "")
         log.info(f"Directive from {sender} — spawning background task: {content[:200]}")
         task = asyncio.create_task(self._process_message(message))
@@ -1174,6 +1373,28 @@ class MaestroTransport:
                     log.info(f"[LOOP] Jesse notified: {resp.status}")
         except Exception as e:
             log.warning(f"[LOOP] Failed to notify Jesse: {e}")
+
+    async def _notify_dead_letter(self, msg_id: str, sender_id: str):
+        """Surface a dead-letter event to Jesse via the gateway bridge. Best-effort — never raises."""
+        try:
+            bridge_url = self._get_bridge_url()
+            payload = {
+                "agent_id": self.agent_id,
+                "from": self.agent_id,
+                "to": "jesse",
+                "content": (
+                    f"⚠️ Dead letter: message {msg_id} from {sender_id} could not be delivered to "
+                    f"{self.agent_id} after {HermesClient._MAX_RETRIES} retries. "
+                    f"Queued at ~/.maestro/dead_letter/{self.agent_id}.jsonl for watchdog retry."
+                ),
+                "summary": f"Dead letter: {sender_id} → {self.agent_id} (msg={msg_id[:12]})",
+                "msg_type": "system",
+            }
+            async with ClientSession() as s:
+                async with s.post(bridge_url, json=payload, timeout=ClientTimeout(total=5)) as resp:
+                    log.info(f"[DEAD_LETTER] Jesse notified: {resp.status}")
+        except Exception as e:
+            log.warning(f"[DEAD_LETTER] Failed to notify Jesse: {e}")
 
     # ----------------------------------------------------------
     # Standard P2P → Hermes
@@ -1259,7 +1480,18 @@ class MaestroTransport:
             log.debug(f"Forward to Hermes: {message.get('id')}")
             output = await self.hermes.send_and_complete(message)
             if not output:
-                log.warning("No output from Hermes — not routing reply")
+                log.warning("No output from Hermes — message dead-lettered")
+                # Notify sender that delivery was deferred
+                sender_id = message.get("sender", {}).get("agentId", "unknown")
+                fail_content = (
+                    f"⚠️ Delivery deferred: your message to {self.agent_id} could not be processed "
+                    f"after {HermesClient._MAX_RETRIES} retries. It has been queued in the dead letter "
+                    f"store (~/.maestro/dead_letter/{self.agent_id}.jsonl) and will be retried by the watchdog. "
+                    f"No action required from you — the system will re-attempt delivery automatically."
+                )
+                asyncio.create_task(self._route_system_reply(message, fail_content))
+                # Surface to Jesse via bridge
+                asyncio.create_task(self._notify_dead_letter(message.get("id"), sender_id))
                 return
 
             # Subject enforcement — every outbound Maestro reply MUST carry a Subject
@@ -1274,19 +1506,55 @@ class MaestroTransport:
                     outbound_subject = first_line
                 else:
                     outbound_subject = f"Response from {self.agent_id}"
-                # Also deliver a self-directed error so the agent learns in-context
-                error_msg = {
-                    "id": str(uuid.uuid4()),
-                    "type": "system",
-                    "content": f"❌ Subject Enforcement: Your response to {message['sender']['agentId']} was auto-corrected because it lacked a Subject: line. All Maestro messages MUST start with 'Subject: <summary>' on the first line. Your reply was still delivered, but future replies without Subject lines will also be auto-corrected.",
-                    "subject": "Subject Enforcement — missing Subject line (auto-corrected)",
-                    "sender": {"agentId": "system"},
-                    "recipient": self.agent_id,
-                    "inReplyTo": message.get("id"),
-                    "timestamp": int(time.time() * 1000),
-                    "version": self.config["version"],
-                }
-                asyncio.create_task(self.hermes.send_and_complete(error_msg))
+                # Enforcement circuit breaker: don't enforce on enforcement.
+                # If the inbound message IS an enforcement bounce (sender is "system"
+                # and content starts with enforcement marker), skip injection entirely.
+                # Otherwise enforce with a per-sender cap (max 3 per 60s).
+                inbound_sender = message.get("sender")
+                if isinstance(inbound_sender, dict):
+                    inbound_sender = inbound_sender.get("agentId", "")
+                else:
+                    inbound_sender = str(inbound_sender) if inbound_sender else ""
+                inbound_content = message.get("content", "")
+                is_enforcement_inbound = (
+                    inbound_sender == "system"
+                    and ("Subject Enforcement" in inbound_content
+                         or "missing Subject line" in inbound_content
+                         or "auto-corrected" in inbound_content)
+                )
+                if is_enforcement_inbound:
+                    log.warning(f"[SUBJECT] Suppressing enforcement injection — inbound message IS an enforcement bounce")
+                else:
+                    # Circuit breaker: max 3 enforcement injections per original sender per 60s window
+                    orig_sender = message.get("sender")
+                    if isinstance(orig_sender, dict):
+                        orig_sender = orig_sender.get("agentId", "unknown")
+                    else:
+                        orig_sender = str(orig_sender) if orig_sender else "unknown"
+                    now_ts = time.time()
+                    times = self._enforcement_injections[orig_sender]
+                    # Prune old entries
+                    while times and (now_ts - times[0]) > self._ENFORCEMENT_WINDOW:
+                        times.popleft()
+                    if len(times) >= self._ENFORCEMENT_MAX:
+                        log.warning(f"[SUBJECT] Enforcement circuit breaker tripped for {orig_sender}: "
+                                    f"{len(times)} injections in {self._ENFORCEMENT_WINDOW}s "
+                                    f"(max {self._ENFORCEMENT_MAX}) — suppressing further injections")
+                    else:
+                        times.append(now_ts)
+                        # Also deliver a self-directed error so the agent learns in-context
+                        error_msg = {
+                            "id": str(uuid.uuid4()),
+                            "type": "system",
+                            "content": f"❌ Subject Enforcement: Your response to {message['sender']['agentId']} was auto-corrected because it lacked a Subject: line. All Maestro messages MUST start with 'Subject: <summary>' on the first line. Your reply was still delivered, but future replies without Subject lines will also be auto-corrected.",
+                            "subject": "Subject Enforcement — missing Subject line (auto-corrected)",
+                            "sender": {"agentId": "system"},
+                            "recipient": self.agent_id,
+                            "inReplyTo": message.get("id"),
+                            "timestamp": int(time.time() * 1000),
+                            "version": self.config["version"],
+                        }
+                        asyncio.create_task(self.hermes.send_and_complete(error_msg))
                 # DO NOT RETURN — continue routing with the auto-generated Subject
 
             # ACKs for directives now surface — loop guards handle noise
@@ -1401,12 +1669,59 @@ class MaestroTransport:
             return web.json_response({"ok": False, "reason": str(e)}, status=500)
 
     # ------------------------------------------------------------------
+    # Board TTL loading
+    # ------------------------------------------------------------------
+
+    _TTL_PATH = Path("/home/andjesse/.maestro/board_ttl.json")
+    _ttl_cache = None
+    _ttl_cache_time = 0
+
+    @classmethod
+    def _load_board_ttl(cls):
+        """Load board TTL config, caching for 60 seconds."""
+        now = time.time()
+        if cls._ttl_cache is not None and (now - cls._ttl_cache_time) < 60:
+            return cls._ttl_cache
+        try:
+            if cls._TTL_PATH.exists():
+                cls._ttl_cache = json.loads(cls._TTL_PATH.read_text())
+                cls._ttl_cache_time = now
+            else:
+                cls._ttl_cache = {}
+        except Exception:
+            cls._ttl_cache = {}
+        return cls._ttl_cache
+
+    def _get_board_limits(self, board_name: str) -> tuple:
+        """Return (max_entries, max_age_hours) for a board from TTL config.
+
+        Resolution order:
+        1. Exact board name match (e.g., 'proteus_bb')
+        2. Prefix match (e.g., 'work_log' for 'work_log_songbird')
+        3. _default fallback: 50 entries, 48 hours
+        """
+        ttl = self._load_board_ttl()
+        if board_name in ttl:
+            cfg = ttl[board_name]
+            return cfg.get("max_entries", 50), cfg.get("max_age_hours", 48)
+        for prefix in sorted(ttl.keys(), key=lambda k: -len(k)):
+            if board_name.startswith(prefix + "_"):
+                cfg = ttl[prefix]
+                return cfg.get("max_entries", 50), cfg.get("max_age_hours", 48)
+        default = ttl.get("_default", {})
+        return default.get("max_entries", 50), default.get("max_age_hours", 48)
+
+    # ------------------------------------------------------------------
     # Work log blackboard
     # ------------------------------------------------------------------
 
     def _write_work_log(self, message: dict):
-        """Append inbound Maestro message to a structured work log."""
-        log_path = Path(f"/home/andjesse/.maestro/blackboards/work_log_{self.agent_id}.json")
+        """Append inbound Maestro message to a structured work log.
+
+        Pruning now reads board_ttl.json for per-board limits.
+        """
+        board_name = f"work_log_{self.agent_id}"
+        log_path = self.bb_root / f"{board_name}.json"
         raw_content = message.get("content", "")
         if isinstance(raw_content, dict):
             raw_content = raw_content.get("text", "")
@@ -1430,11 +1745,10 @@ class MaestroTransport:
                 except Exception:
                     logs = []
             logs.append(entry)
-            # Keep last 50 entries per agent (hygiene target is 50)
-            logs = logs[-50:]
-            # Time-based pruning: remove entries older than 24 hours
-            MAX_AGE_HOURS = 24
-            cutoff_ms = int((time.time() - MAX_AGE_HOURS * 3600) * 1000)
+            # Apply board-level TTL limits
+            max_entries, max_age_hours = self._get_board_limits(board_name)
+            logs = logs[-max_entries:]
+            cutoff_ms = int((time.time() - max_age_hours * 3600) * 1000)
             logs = [e for e in logs if e.get("timestamp", 0) > cutoff_ms]
             log_path.write_text(json.dumps(logs, indent=2, ensure_ascii=False))
         except Exception as e:
@@ -1601,13 +1915,23 @@ class MaestroTransport:
         except Exception:
             pass
         bridge_url = self._get_bridge_url()
-        sender = message.get("sender", {}).get("agentId", "unknown")
+        sender = message.get("sender")
+        if isinstance(sender, dict):
+            sender = sender.get("agentId", "unknown")
+        else:
+            sender = str(sender) if sender else "unknown"
         try:
             content = message.get("content", "")
             # Telegram message limit is 4096 chars. Use full content up to that,
             # truncate with ellipsis if over, and attach a file hint for overflow.
             if len(content) > 3900:
                 content = content[:3897] + "..."
+            # Include gateway API details so the bridge can forward to the LLM
+            # as a secondary wake path — ensures messages reach the agent even
+            # when the transport's primary processing path (send_and_complete)
+            # times out or fails (dead letter scenario).
+            gateway_api_url = self.hermes.api_url
+            gateway_api_key = self.hermes.api_key
             payload = {
                 "agent_id": self.agent_id,
                 "from": sender,
@@ -1616,6 +1940,9 @@ class MaestroTransport:
                 "content": content,
                 "summary": content[:200],
                 "msg_type": "maestro_out" if sender == self.agent_id else message.get("type", "direct"),
+                "gateway_api_url": gateway_api_url,
+                "gateway_api_key": gateway_api_key,
+                "msg_id": message.get("id", ""),
             }
             async with ClientSession() as s:
                 async with s.post(bridge_url, json=payload, timeout=ClientTimeout(total=5)) as resp:
@@ -1918,7 +2245,9 @@ class MaestroTransport:
             log.error(f"Hermes API not reachable at {self.hermes.api_url}"); sys.exit(1)
         log.info(f"Hermes API reachable")
         for peer_id, peer_url in self.config.get("knownPeers", {}).items():
-            self.registry.register(peer_id, peer_url)
+            existing = self.registry.lookup(peer_id)
+            existing_pk = existing.get("publicKey") if existing else None
+            self.registry.register(peer_id, peer_url, public_key=existing_pk)
             log.info(f"Seeded peer {peer_id} → {peer_url}")
         self.registry.register(self.agent_id, f"http://127.0.0.1:{self.port}/message", public_key=self._public_key)
         self.started_at = int(time.time()*1000)
