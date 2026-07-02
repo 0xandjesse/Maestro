@@ -1,0 +1,34 @@
+diff --git a/gateway/platforms/telegram.py b/gateway/platforms/telegram.py
+index 4c56937e5..1b83bdf1c 100644
+--- a/gateway/platforms/telegram.py
++++ b/gateway/platforms/telegram.py
+@@ -3948,12 +3948,10 @@ class TelegramAdapter(BasePlatformAdapter):
+         When ``allowed_chats`` is non-empty, it remains a hard gate except for
+         the narrow ``guest_mode`` bypass: group/supergroup messages that
+         explicitly @mention this bot. Replies and regex wake words do not bypass
+-        ``allowed_chats``. When ``require_mention`` is enabled, slash commands are not given
+-        special treatment — they must pass the same mention/reply checks
+-        as any other group message.  Users can still trigger commands via
+-        the Telegram bot menu (``/command@botname``) or by explicitly
+-        mentioning the bot (``@botname /command``), both of which are
+-        recognised as mentions by :meth:`_message_mentions_bot`.
++        ``allowed_chats``. Slash commands, however, bypass the
++        ``require_mention`` / mention pattern / reply gate — they are an
++        explicit user→bot interaction and do not need a trigger. They still
++        must pass the ``allowed_chats`` whitelist.
+         """
+         if not self._is_group_chat(message):
+             return True
+@@ -3979,6 +3977,12 @@ class TelegramAdapter(BasePlatformAdapter):
+         if allowed and chat_id_str not in allowed:
+             return guest_mention
+ 
++        # Slash commands are an explicit user<->bot interaction; once they pass
++        # the allowed_chats gate above they bypass require_mention / regex wake
++        # word / mention checks entirely.
++        if is_command:
++            return True
++
+         if guest_mention:
+             return True
+         if chat_id_str in self._telegram_free_response_chats():

@@ -46,18 +46,14 @@ def create_checklist(created_by: str, assigned_to: str, title: str, items: list,
     item_list = []
     for desc in items:
         item_id = _generate_item_id(item_list)
-        # Items can be plain strings or dicts with {description, notify, verify, category, ...}
+        # Items can be plain strings or dicts with {description, notify, ...}
         if isinstance(desc, dict):
             notify = desc.get("notify")
             description = desc.get("description", str(desc))
-            verify = desc.get("verify")
-            category = desc.get("category", "general")
         else:
             notify = None
             description = desc
-            verify = None
-            category = "general"
-        item_dict = {
+        item_list.append({
             "id": item_id,
             "description": description,
             "notify": notify,       # agent_id, "jesse", or None
@@ -68,11 +64,7 @@ def create_checklist(created_by: str, assigned_to: str, title: str, items: list,
             "summary": None,
             "artifacts": [],
             "child_checklist_id": None,
-            "category": category,
-        }
-        if verify is not None:
-            item_dict["verify"] = verify
-        item_list.append(item_dict)
+        })
     
     cl = {
         "id": checklist_id,

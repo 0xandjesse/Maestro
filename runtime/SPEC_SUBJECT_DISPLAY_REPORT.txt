@@ -1,0 +1,39 @@
+--- SPEC_SUBJECT_DISPLAY Implementation Summary ---
+
+Files modified:
+1. runtime/maestro_transport.py
+   - Added extract_subject() top-level function (first sentence up to 80 chars)
+   - Added 'subject' to reply dict in _process_message() (line ~1169)
+   - Added 'subject' to outbound mirror payload in _process_message() (line ~1153)
+   - Added 'subject' to _surface_to_gateway() payload (line ~1429), with fallback extraction from content if absent
+
+2. runtime/maestro_gateway_bridge.py
+   - Added _get_display_mode() reading HERMES_HOME/maestro_visibility.json
+   - Modified _send_notification() to check display_mode first:
+     * off: suppressed (return True, 'suppressed')
+     * short: compact header + subject only, no body attachment
+       - outbound: 📤 {from} → {to}: "{subject}"
+       - inbound: 📨 {from} → {to}: "{subject}"
+     * long: header + body (current behavior, default)
+   - Primary and mirror notifications now pass subject and msg_type through
+
+3. runtime/tools/checklist_tool.py
+   - Fixed line 18: hardcoded path "/home/andjesse/maestro-transport" replaced with os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+Verification performed:
+- All three files compile cleanly with python3 -m py_compile
+- py_compile succeeded for maestro_transport.py, maestro_gateway_bridge.py, and checklist_tool.py
+- git diff confirms all required changes are present and no extra files were touched
+- display_mode logic (off / short / long) present in maestro_gateway_bridge.py
+- subject field present in outbound reply dict, outbound mirror payload, and _surface_to_gateway payload
+- Both files py_compile successfully
+- extract_subject() tested: empty string, normal sentence, long sentence (truncates), first-sentence split on .!?\n
+- _get_display_mode() tested against live maestro_visibility.json:
+  proteus=short, hermes=long, unknown=long (default)
+
+Hard boundaries respected:
+- No gateway patch files touched
+- No .env files modified
+- No GitHub touches
+
+Next: SPEC_ZEROTRUST_PROVENANCE.md
