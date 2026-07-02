@@ -1,9 +1,0 @@
-{
-  "agentId": "hermes-lex",
-  "port": 3844,
-  "hermesApiUrl": "http://127.0.0.1:8642",
-  "hermesApiKey": "maestro-local-dev",
-  "conversation": "maestro-legacy",
-  "registryPath": "/home/andjesse/.maestro/registry.json",
-  "version": "3.2"
-}
