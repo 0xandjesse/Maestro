@@ -184,16 +184,6 @@ class TestPolicyHelpers:
         profile = PolicyProfile(name="test", policies={"require_signatures": False})
         assert profile.requires_signatures() is False
 
-    def test_accepts_self_issued(self):
-        profile = PolicyProfile(name="test", policies={"accept_tokens": ["self-issued"]})
-        assert profile.accepts_token_from("self-issued") is True
-        assert profile.accepts_token_from("any-agent") is True  # self-issued accepts all
-
-    def test_accepts_specific_issuer(self):
-        profile = PolicyProfile(name="test", policies={"accept_tokens": ["taskmaster-issued"]})
-        assert profile.accepts_token_from("taskmaster-issued") is True
-        assert profile.accepts_token_from("other") is False
-
     def test_get_with_default(self):
         profile = PolicyProfile(name="test", policies={"foo": "bar"})
         assert profile.get("foo") == "bar"

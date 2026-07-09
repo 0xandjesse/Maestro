@@ -70,13 +70,6 @@ class PolicyProfile:
         """Return True if this profile requires signatures."""
         return bool(self.policies.get("require_signatures", True))
 
-    def accepts_token_from(self, issuer: str) -> bool:
-        """Return True if this profile accepts tokens from *issuer*."""
-        accepted = self.policies.get("accept_tokens", ["self-issued"])
-        if isinstance(accepted, list):
-            return issuer in accepted or "self-issued" in accepted
-        return False
-
 
 # ── Default Plaza Profile ──────────────────────────────────────────────
 
