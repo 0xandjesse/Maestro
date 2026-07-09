@@ -1,1 +1,1 @@
-# Nucleus package — the 16-module Maestro Core
+# nucleus — Maestro deployment authority package

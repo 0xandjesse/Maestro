@@ -1,0 +1,82 @@
+{
+  "version": "1.0.0",
+  "last_updated": "2026-07-08T22:20:00Z",
+  "agents": {
+    "mnemosyne": {
+      "gateway_port": 8642,
+      "transport_port": 3845
+    },
+    "lexicon": {
+      "gateway_port": 8643,
+      "transport_port": 3843
+    },
+    "proteus": {
+      "gateway_port": 8645,
+      "transport_port": 3846
+    },
+    "stormtrooper": {
+      "gateway_port": 8646,
+      "transport_port": 3847
+    },
+    "penny-lane": {
+      "gateway_port": 8648,
+      "transport_port": 3848
+    },
+    "songbird": {
+      "gateway_port": 8649,
+      "transport_port": 3842
+    },
+    "lulu": {
+      "gateway_port": 8650,
+      "transport_port": 3850
+    },
+    "cee-lo": {
+      "gateway_port": 8647,
+      "transport_port": 3851
+    },
+    "cactus-jack": {
+      "gateway_port": 8652,
+      "transport_port": 3852
+    },
+    "chatterbox": {
+      "gateway_port": 8651,
+      "transport_port": 3857
+    },
+    "thoth": {
+      "gateway_port": 8654,
+      "transport_port": 3855
+    },
+    "zulu": {
+      "gateway_port": 8655,
+      "transport_port": 3856
+    },
+    "keystone": {
+      "gateway_port": 8657,
+      "transport_port": 3858
+    },
+    "log": {
+      "gateway_port": 8661,
+      "transport_port": 3859
+    },
+    "mondo-gecko": {
+      "gateway_port": 8653,
+      "transport_port": 3861
+    },
+    "helper": {
+      "gateway_port": 8659,
+      "transport_port": 3860
+    },
+    "uatu": {
+      "gateway_port": 8656,
+      "transport_port": 3854
+    },
+    "hermes": {
+      "gateway_port": 8641,
+      "transport_port": 3844
+    },
+    "sentinel": {
+      "gateway_port": 8658,
+      "transport_port": 3862
+    }
+  }
+}

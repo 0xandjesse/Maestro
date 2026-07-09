@@ -1,0 +1,34 @@
+diff --git a/hermes_cli/commands.py b/hermes_cli/commands.py
+index b3556d393..b908e7660 100644
+--- a/hermes_cli/commands.py
++++ b/hermes_cli/commands.py
+@@ -155,6 +155,12 @@ COMMAND_REGISTRY: list[CommandDef] = [
+     CommandDef("busy", "Control what Enter does while Hermes is working", "Configuration",
+                cli_only=True, args_hint="[queue|steer|interrupt|status]",
+                subcommands=("queue", "steer", "interrupt", "status")),
++    CommandDef("maestro", "Control Maestro message visibility", "Configuration",
++               gateway_only=True, args_hint="messages on|off"),
+ 
+     # Tools & Skills
+     CommandDef("tools", "Manage tools: /tools [list|disable|enable] [name...]", "Tools & Skills",
+@@ -208,6 +214,20 @@ COMMAND_REGISTRY: list[CommandDef] = [
+                gateway_only=True),
+     CommandDef("debug", "Upload debug report (system info + logs) and get shareable links", "Info"),
+ 
++    CommandDef("bb", "View an agent's blackboard (last 4h activity, plain English)", "Info",
++               aliases=(), args_hint="[agent_id]"),
++    CommandDef("bball", "View all agents' blackboards", "Info"),
++    CommandDef("log", "View an agent's technical work log (last 100 entries)", "Info",
++               args_hint="[agent_id]"),
++    CommandDef("memory", "View an agent's Task Memory summary", "Info",
++               args_hint="[agent_id]"),
++    CommandDef("memoryall", "View all agents' Task Memory summaries", "Info"),
++
++    CommandDef("cl", "List active Checklists for an agent", "Info",
++               args_hint="[agent_id]"),
++    CommandDef("clshow", "Show a Checklist with item statuses", "Info",
++               args_hint="<checklist_id>"),
++
+     # Exit
+     CommandDef("quit", "Exit the CLI", "Exit",
+                cli_only=True, aliases=("exit",)),

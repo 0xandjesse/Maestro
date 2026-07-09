@@ -1,0 +1,38 @@
+{
+  "pipeline_id": "newsletter",
+  "description": "Weekly newsletter production pipeline",
+  "phases": [
+    {
+      "phase_id": "research",
+      "agent": "lulu",
+      "description": "Research trending topics in AI/ML and produce a research document with 3-5 story candidates, sources, and key angles.",
+      "depends_on": [],
+      "output_artifact": "research_doc",
+      "timeout_minutes": 30
+    },
+    {
+      "phase_id": "copy",
+      "agent": "penny-lane",
+      "description": "Write the newsletter draft from the research document. Produce engaging copy with clear narrative flow.",
+      "depends_on": ["research"],
+      "output_artifact": "newsletter_draft",
+      "timeout_minutes": 45
+    },
+    {
+      "phase_id": "audit",
+      "agent": "mnemosyne",
+      "description": "Audit the newsletter draft for factual accuracy, style consistency, and editorial quality. Produce an audit report with findings.",
+      "depends_on": ["copy"],
+      "output_artifact": "audit_report",
+      "timeout_minutes": 30
+    },
+    {
+      "phase_id": "build",
+      "agent": "proteus",
+      "description": "Build the final newsletter from the audited draft. Apply formatting, verify all links, and deliver.",
+      "depends_on": ["audit"],
+      "output_artifact": "final_delivery",
+      "timeout_minutes": 30
+    }
+  ]
+}

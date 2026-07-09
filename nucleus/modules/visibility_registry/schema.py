@@ -10,7 +10,7 @@ from typing import Any
 
 # ── per-field constraints ──────────────────────────────────────────────
 
-VALID_MODES = frozenset({"long", "off"})
+VALID_MODES = frozenset({"on", "off"})
 VALID_DIRECTIONS = frozenset({"inbound", "outbound"})
 
 

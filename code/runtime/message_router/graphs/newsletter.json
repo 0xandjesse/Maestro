@@ -1,0 +1,68 @@
+{
+  "version": "1.0",
+  "pipeline": "newsletter",
+  "description": "ADR-006 newsletter pipeline: brief → research(fan-out) → copy → audit(loop) → publish",
+  "nodes": {
+    "start": {
+      "type": "sequence",
+      "nodes": ["fan_out_research", "fan_in_research", "copy", "audit_loop", "publish"]
+    },
+    "fan_out_research": {
+      "type": "fan_out",
+      "targets": [
+        {"node": "research_lulu", "agent": "lulu"},
+        {"node": "research_thoth", "agent": "thoth"}
+      ]
+    },
+    "research_lulu": {
+      "type": "phase",
+      "agent": "lulu",
+      "work_type": "research_lulu",
+      "directive": "Research the top 3 AI agent stories this week from Lulu's angle. Produce research_lulu.json with sources, summaries, and angles.",
+      "next": "fan_in_research"
+    },
+    "research_thoth": {
+      "type": "phase",
+      "agent": "thoth",
+      "work_type": "research_thoth",
+      "directive": "Research the top 3 AI agent stories this week from Thoth's angle. Produce research_thoth.json with sources, summaries, and angles.",
+      "next": "fan_in_research"
+    },
+    "fan_in_research": {
+      "type": "fan_in",
+      "sources": ["research_lulu", "research_thoth"],
+      "merge_strategy": "append",
+      "timeout_seconds": 3600,
+      "on_timeout": "route_partial",
+      "next": "copy"
+    },
+    "copy": {
+      "type": "phase",
+      "agent": "penny-lane",
+      "work_type": "copy",
+      "directive": "Write the newsletter copy based on the merged research. Produce copy_output.md.",
+      "next": "audit_loop"
+    },
+    "audit_loop": {
+      "type": "loop",
+      "max_iterations": 3,
+      "condition": {"field": "payload.phases.audit.result", "operator": "equals", "value": "pass"},
+      "body": ["audit"],
+      "after": "publish",
+      "on_max": "route_with_warning"
+    },
+    "audit": {
+      "type": "phase",
+      "agent": "mnemosyne",
+      "work_type": "audit",
+      "directive": "Audit the newsletter copy in copy_output.md. Check facts, tone, and formatting. Produce audit_report.json with result: pass/fail and notes.",
+      "next": "audit_loop"
+    },
+    "publish": {
+      "type": "phase",
+      "agent": "proteus",
+      "work_type": "publish",
+      "directive": "Build and deliver the final newsletter. Produce final_newsletter.md and send to Jesse."
+    }
+  }
+}
